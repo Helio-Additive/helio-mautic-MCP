@@ -1,5 +1,106 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
+import { setLimitedParam, setParam } from './utils.js';
+
+function pct(numerator: number, denominator: number): number | null {
+  if (!denominator) {
+    return null;
+  }
+
+  return Math.round((numerator / denominator) * 10000) / 100;
+}
+
+function summarizeEmail(email: any): Record<string, unknown> {
+  const sentCount = Number(email?.sentCount ?? 0);
+  const readCount = Number(email?.readCount ?? 0);
+  const variantSentCount = Number(email?.variantSentCount ?? 0);
+  const variantReadCount = Number(email?.variantReadCount ?? 0);
+
+  return {
+    id: email?.id,
+    name: email?.name,
+    subject: email?.subject,
+    emailType: email?.emailType,
+    isPublished: email?.isPublished,
+    sentCount,
+    readCount,
+    readRatePct: pct(readCount, sentCount),
+    variantSentCount,
+    variantReadCount,
+    variantReadRatePct: pct(variantReadCount, variantSentCount),
+    dateAdded: email?.dateAdded,
+    dateModified: email?.dateModified,
+    createdByUser: email?.createdByUser,
+    modifiedByUser: email?.modifiedByUser,
+    fromAddress: email?.fromAddress,
+    fromName: email?.fromName,
+    replyToAddress: email?.replyToAddress,
+  };
+}
+
+function stripEmailContent(email: any): Record<string, unknown> {
+  if (!email || typeof email !== 'object') {
+    return email;
+  }
+
+  const { customHtml: _customHtml, plainText: _plainText, ...withoutContent } = email;
+  return withoutContent;
+}
+
+function formatEmailOutput(email: any, options: { minimal?: boolean; includeContent?: boolean }): Record<string, unknown> {
+  if (options.minimal) {
+    return summarizeEmail(email);
+  }
+
+  if (options.includeContent === false) {
+    return stripEmailContent(email);
+  }
+
+  return email;
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function normalizeChart(chart: any): Record<string, unknown> {
+  const labels = Array.isArray(chart?.labels) ? chart.labels : [];
+  const datasets = Array.isArray(chart?.datasets) ? chart.datasets : [];
+
+  return {
+    labels,
+    datasets: datasets.map((dataset: any) => {
+      const data = Array.isArray(dataset?.data) ? dataset.data.map((value: unknown) => Number(value ?? 0)) : [];
+
+      return {
+        label: dataset?.label ?? null,
+        data,
+        total: data.reduce((sum: number, value: number) => sum + value, 0),
+      };
+    }),
+  };
+}
+
+function extractChartsFromHtml(html: string): Record<string, unknown>[] {
+  return Array.from(html.matchAll(/<canvas[^>]*>([\s\S]*?)<\/canvas>/g))
+    .map(match => decodeHtmlEntities(match[1].trim()))
+    .filter(Boolean)
+    .map((raw, index) => {
+      try {
+        return normalizeChart(JSON.parse(raw));
+      } catch (error) {
+        return {
+          index,
+          parseError: error instanceof Error ? error.message : 'Failed to parse chart data',
+          rawPreview: raw.slice(0, 120),
+        };
+      }
+    });
+}
 
 export const toolDefinitions: ToolDefinition[] = [
   // Existing email tools
@@ -25,6 +126,8 @@ export const toolDefinitions: ToolDefinition[] = [
         limit: { type: 'number', description: 'Number of results', maximum: 200 },
         start: { type: 'number', description: 'Starting offset' },
         publishedOnly: { type: 'boolean', description: 'Only published emails' },
+        minimal: { type: 'boolean', description: 'Return compact email metadata and counters' },
+        includeContent: { type: 'boolean', description: 'Include customHtml/plainText content in full output (default true)' },
       },
     },
   },
@@ -35,6 +138,8 @@ export const toolDefinitions: ToolDefinition[] = [
       type: 'object',
       properties: {
         id: { type: 'number', description: 'Email ID' },
+        minimal: { type: 'boolean', description: 'Return compact email metadata and counters' },
+        includeContent: { type: 'boolean', description: 'Include customHtml/plainText content in full output (default true)' },
       },
       required: ['id'],
     },
@@ -107,6 +212,31 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['emailId', 'dateFrom', 'dateTo'],
     },
   },
+  {
+    name: 'get_email_stats_v6',
+    description: 'Get Mautic 6 email aggregate counters from the email detail endpoint',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        emailId: { type: 'number', description: 'Email ID' },
+      },
+      required: ['emailId'],
+    },
+  },
+  {
+    name: 'get_email_graph_stats_v6',
+    description: 'Get Mautic 6 email graph statistics from the authenticated web stats route',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        emailId: { type: 'number', description: 'Email ID' },
+        isVariant: { type: 'boolean', description: 'Whether this is a variant email' },
+        dateFrom: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+        dateTo: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+      },
+      required: ['emailId', 'dateFrom', 'dateTo'],
+    },
+  },
 ];
 
 export const toolHandlers: Record<string, ToolHandler> = {
@@ -124,22 +254,31 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async list_emails(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.search) params.search = args.search;
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
-    if (args?.start) params.start = args.start;
-    if (args?.publishedOnly) params.publishedOnly = args.publishedOnly;
+    setParam(params, 'search', args?.search);
+    setLimitedParam(params, 'limit', args?.limit, 200);
+    setParam(params, 'start', args?.start);
+    setParam(params, 'publishedOnly', args?.publishedOnly);
 
     const response = await client.v1.get('/emails', { params });
+    const emails = Object.fromEntries(
+      Object.entries(response.data.emails ?? {}).map(([id, email]) => [
+        id,
+        formatEmailOutput(email, { minimal: args?.minimal, includeContent: args?.includeContent }),
+      ]),
+    );
+
     return {
-      content: [{ type: 'text', text: `Found ${response.data.total} emails:\n${JSON.stringify(response.data.emails, null, 2)}` }],
+      content: [{ type: 'text', text: `Found ${response.data.total} emails:\n${JSON.stringify(emails, null, 2)}` }],
     };
   },
 
   async get_email(client: MauticApiClient, args: any) {
     const { id } = args;
     const response = await client.v1.get(`/emails/${id}`);
+    const email = formatEmailOutput(response.data.email, { minimal: args?.minimal, includeContent: args?.includeContent });
+
     return {
-      content: [{ type: 'text', text: `Email details:\n${JSON.stringify(response.data.email, null, 2)}` }],
+      content: [{ type: 'text', text: `Email details:\n${JSON.stringify(email, null, 2)}` }],
     };
   },
 
@@ -176,13 +315,47 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async get_email_graph_stats(client: MauticApiClient, args: any) {
-    const { emailId, isVariant, dateFrom, dateTo } = args;
-    const variant = isVariant ? 1 : 0;
+    const { emailId, dateFrom, dateTo } = args;
     const response = await client.v1.get(`/emails/${emailId}`, {
       params: { dateFrom, dateTo },
     });
     return {
       content: [{ type: 'text', text: `Email ${emailId} stats (${dateFrom} to ${dateTo}):\n${JSON.stringify(response.data, null, 2)}` }],
+    };
+  },
+
+  async get_email_stats_v6(client: MauticApiClient, args: any) {
+    const { emailId } = args;
+    const response = await client.v1.get(`/emails/${emailId}`);
+    const stats = {
+      source: '/emails/{id} aggregate counters',
+      note: 'Mautic 6 does not expose /emails/{id}/stats via the REST API. Click time-series data is available through get_email_graph_stats_v6.',
+      email: summarizeEmail(response.data.email),
+    };
+
+    return {
+      content: [{ type: 'text', text: `Mautic 6 email statistics:\n${JSON.stringify(stats, null, 2)}` }],
+    };
+  },
+
+  async get_email_graph_stats_v6(client: MauticApiClient, args: any) {
+    const { emailId, isVariant, dateFrom, dateTo } = args;
+    const variant = isVariant ? 1 : 0;
+    const path = `/emails-graph-stats/${encodeURIComponent(emailId)}/${variant}/${encodeURIComponent(dateFrom)}/${encodeURIComponent(dateTo)}`;
+    const response = await client.web.get(path);
+    const charts = extractChartsFromHtml(response.data);
+    const result = {
+      source: path,
+      emailId,
+      isVariant: Boolean(isVariant),
+      dateFrom,
+      dateTo,
+      charts,
+      note: charts.length ? undefined : 'Mautic returned no chart canvases for this range/email, usually because there is no graph data.',
+    };
+
+    return {
+      content: [{ type: 'text', text: `Mautic 6 email ${emailId} graph stats (${dateFrom} to ${dateTo}):\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 };

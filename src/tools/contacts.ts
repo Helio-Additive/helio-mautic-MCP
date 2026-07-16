@@ -4,14 +4,45 @@ import type { ToolDefinition, ToolHandler } from '../types/index.js';
 import { normalizeContact, normalizeContacts, setLimitedParam, setParam } from './utils.js';
 
 function buildContactPayload(args: any) {
-  const { firstName, lastName, customFields, ...rest } = args;
+  const { firstName, lastName, ownerId, customFields, ...rest } = args;
 
   return {
     ...rest,
     ...customFields,
     ...(firstName !== undefined ? { firstname: firstName } : {}),
     ...(lastName !== undefined ? { lastname: lastName } : {}),
+    ...(ownerId !== undefined ? { owner: ownerId } : {}),
   };
+}
+
+async function getContactByIdOrEmail(client: MauticApiClient, args: any) {
+  const { id, email } = args;
+
+  if (id !== undefined) {
+    const response = await client.v1.get(`/contacts/${id}`);
+    return response.data.contact;
+  }
+
+  if (email) {
+    const searchResponse = await client.v1.get('/contacts', {
+      params: { search: `email:${email}`, limit: 1 },
+    });
+
+    if (searchResponse.data.total === 0) {
+      return null;
+    }
+
+    const contactId = Object.keys(searchResponse.data.contacts)[0];
+    const response = await client.v1.get(`/contacts/${contactId}`);
+    return response.data.contact;
+  }
+
+  throw new McpError(ErrorCode.InvalidParams, 'Either id or email must be provided');
+}
+
+function getFieldValue(contact: any, alias: string): unknown {
+  const field = contact?.fields?.all?.[alias];
+  return field && typeof field === 'object' && 'value' in field ? field.value : field;
 }
 
 export const toolDefinitions: ToolDefinition[] = [
@@ -27,6 +58,7 @@ export const toolDefinitions: ToolDefinition[] = [
         phone: { type: 'string', description: 'Phone number' },
         company: { type: 'string', description: 'Company name' },
         position: { type: 'string', description: 'Job position' },
+        ownerId: { type: ['number', 'null'], description: 'Mautic user ID to assign as owner; null clears owner' },
         customFields: { type: 'object', description: 'Custom field values keyed by Mautic field alias' },
       },
       required: ['email'],
@@ -45,6 +77,7 @@ export const toolDefinitions: ToolDefinition[] = [
         phone: { type: 'string', description: 'Phone number' },
         company: { type: 'string', description: 'Company name' },
         position: { type: 'string', description: 'Job position' },
+        ownerId: { type: ['number', 'null'], description: 'Mautic user ID to assign as owner; null clears owner' },
         customFields: { type: 'object', description: 'Custom field values keyed by Mautic field alias' },
       },
       required: ['id'],
@@ -83,6 +116,17 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_contact_preferences',
+    description: 'Get contact preference and contactability state without mutating it',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'Contact ID' },
+        email: { type: 'string', description: 'Contact email address' },
+      },
+    },
+  },
+  {
     name: 'delete_contact',
     description: 'Delete a contact from Mautic',
     inputSchema: {
@@ -94,8 +138,59 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'assign_contact_owner',
+    description: 'Assign or clear a Mautic contact owner',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'number', description: 'Contact ID' },
+        ownerId: { type: ['number', 'null'], description: 'Mautic user ID to assign as owner; null clears owner' },
+      },
+      required: ['contactId', 'ownerId'],
+    },
+  },
+  {
+    name: 'add_contact_dnc',
+    description: 'Add a Do Not Contact entry for a contact channel',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'number', description: 'Contact ID' },
+        channel: { type: 'string', description: 'DNC channel, usually email or sms' },
+        reason: { type: 'number', description: 'Mautic DNC reason code; defaults to manual if omitted' },
+        comments: { type: 'string', description: 'Optional DNC comments' },
+        channelId: { type: 'number', description: 'Optional channel entity ID' },
+      },
+      required: ['contactId', 'channel'],
+    },
+  },
+  {
+    name: 'remove_contact_dnc',
+    description: 'Remove a Do Not Contact entry for a contact channel',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'number', description: 'Contact ID' },
+        channel: { type: 'string', description: 'DNC channel, usually email or sms' },
+      },
+      required: ['contactId', 'channel'],
+    },
+  },
+  {
     name: 'add_contact_to_segment',
     description: 'Add a contact to a specific segment',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'number', description: 'Contact ID' },
+        segmentId: { type: 'number', description: 'Segment ID' },
+      },
+      required: ['contactId', 'segmentId'],
+    },
+  },
+  {
+    name: 'remove_contact_from_segment',
+    description: 'Remove a contact from a specific segment',
     inputSchema: {
       type: 'object',
       properties: {
@@ -124,25 +219,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async get_contact(client: MauticApiClient, args: any) {
-    const { id, email, minimal, fieldsOnly, fields } = args;
-    let response;
+    const { email, minimal, fieldsOnly, fields } = args;
+    const contact = await getContactByIdOrEmail(client, args);
 
-    if (id !== undefined) {
-      response = await client.v1.get(`/contacts/${id}`);
-    } else if (email) {
-      const searchResponse = await client.v1.get('/contacts', {
-        params: { search: `email:${email}`, limit: 1 }
-      });
-      if (searchResponse.data.total === 0) {
-        return { content: [{ type: 'text', text: `No contact found with email: ${email}` }] };
-      }
-      const contactId = Object.keys(searchResponse.data.contacts)[0];
-      response = await client.v1.get(`/contacts/${contactId}`);
-    } else {
-      throw new McpError(ErrorCode.InvalidParams, 'Either id or email must be provided');
+    if (!contact) {
+      return { content: [{ type: 'text', text: `No contact found with email: ${email}` }] };
     }
 
-    const contact = response.data.contact;
     const output = fieldsOnly
       ? { id: contact?.id, fields: normalizeContact(contact, fields).fields }
       : minimal
@@ -151,6 +234,32 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
     return {
       content: [{ type: 'text', text: `Contact details:\n${JSON.stringify(output, null, 2)}` }],
+    };
+  },
+
+  async get_contact_preferences(client: MauticApiClient, args: any) {
+    const { email } = args;
+    const contact = await getContactByIdOrEmail(client, args);
+
+    if (!contact) {
+      return { content: [{ type: 'text', text: `No contact found with email: ${email}` }] };
+    }
+
+    const segmentsResponse = await client.v1.get(`/contacts/${contact.id}/segments`);
+    const campaignsResponse = await client.v1.get(`/contacts/${contact.id}/campaigns`);
+    const preferences = {
+      id: contact.id,
+      email: getFieldValue(contact, 'email'),
+      doNotContact: contact.doNotContact ?? [],
+      frequencyRules: contact.frequencyRules ?? [],
+      owner: contact.owner ?? null,
+      tags: contact.tags ?? [],
+      segments: segmentsResponse.data.lists ?? segmentsResponse.data,
+      campaigns: campaignsResponse.data.campaigns ?? campaignsResponse.data,
+    };
+
+    return {
+      content: [{ type: 'text', text: `Contact preferences:\n${JSON.stringify(preferences, null, 2)}` }],
     };
   },
 
@@ -181,11 +290,53 @@ export const toolHandlers: Record<string, ToolHandler> = {
     return { content: [{ type: 'text', text: `Contact ${id} deleted successfully` }] };
   },
 
+  async assign_contact_owner(client: MauticApiClient, args: any) {
+    const { contactId, ownerId } = args;
+    const response = await client.v1.patch(`/contacts/${contactId}/edit`, { owner: ownerId });
+    return {
+      content: [{ type: 'text', text: `Contact ${contactId} owner updated successfully:\n${JSON.stringify(normalizeContact(response.data.contact), null, 2)}` }],
+    };
+  },
+
+  async add_contact_dnc(client: MauticApiClient, args: any) {
+    const { contactId, channel, reason, comments, channelId } = args;
+    const payload: any = {};
+    setParam(payload, 'reason', reason);
+    setParam(payload, 'comments', comments);
+    setParam(payload, 'channelId', channelId);
+
+    const response = await client.v1.post(`/contacts/${contactId}/dnc/${encodeURIComponent(channel)}/add`, payload);
+    return {
+      content: [{ type: 'text', text: `DNC added to contact ${contactId} for ${channel}:\n${JSON.stringify(normalizeContact(response.data.contact), null, 2)}` }],
+    };
+  },
+
+  async remove_contact_dnc(client: MauticApiClient, args: any) {
+    const { contactId, channel } = args;
+    const response = await client.v1.post(`/contacts/${contactId}/dnc/${encodeURIComponent(channel)}/remove`);
+    const result = {
+      recordFound: response.data.recordFound,
+      contact: normalizeContact(response.data.contact),
+    };
+
+    return {
+      content: [{ type: 'text', text: `DNC removed from contact ${contactId} for ${channel}:\n${JSON.stringify(result, null, 2)}` }],
+    };
+  },
+
   async add_contact_to_segment(client: MauticApiClient, args: any) {
     const { contactId, segmentId } = args;
     await client.v1.post(`/segments/${segmentId}/contact/${contactId}/add`);
     return {
       content: [{ type: 'text', text: `Contact ${contactId} added to segment ${segmentId} successfully` }],
+    };
+  },
+
+  async remove_contact_from_segment(client: MauticApiClient, args: any) {
+    const { contactId, segmentId } = args;
+    await client.v1.post(`/segments/${segmentId}/contact/${contactId}/remove`);
+    return {
+      content: [{ type: 'text', text: `Contact ${contactId} removed from segment ${segmentId} successfully` }],
     };
   },
 };

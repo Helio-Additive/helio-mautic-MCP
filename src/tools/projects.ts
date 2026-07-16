@@ -1,5 +1,6 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
+import { setParam } from './utils.js';
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -81,8 +82,8 @@ export const toolDefinitions: ToolDefinition[] = [
 export const toolHandlers: Record<string, ToolHandler> = {
   async list_projects(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.page) params.page = args.page;
-    if (args?.itemsPerPage) params.itemsPerPage = args.itemsPerPage;
+    setParam(params, 'page', args?.page);
+    setParam(params, 'itemsPerPage', args?.itemsPerPage);
 
     const response = await client.v2.get('/projects', { params });
     const { items, total } = client.parseV2Collection(response.data);
@@ -101,8 +102,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async create_project(client: MauticApiClient, args: any) {
     const payload: any = { name: args.name };
-    if (args.description) payload.description = args.description;
-    if (args.properties) payload.properties = args.properties;
+    setParam(payload, 'description', args.description);
+    setParam(payload, 'properties', args.properties);
 
     const response = await client.v2.post('/projects', payload);
     return {

@@ -34,6 +34,45 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_segment',
+    description: 'Get contact segment details',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'Segment ID' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'update_segment',
+    description: 'Update an existing contact segment',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'Segment ID' },
+        name: { type: 'string', description: 'Segment name' },
+        alias: { type: 'string', description: 'Segment alias' },
+        description: { type: 'string', description: 'Segment description' },
+        isPublished: { type: 'boolean', description: 'Publish segment' },
+        isGlobal: { type: 'boolean', description: 'Global segment' },
+        filters: { type: 'array', description: 'Segment filters' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'delete_segment',
+    description: 'Delete a contact segment',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'Segment ID' },
+      },
+      required: ['id'],
+    },
+  },
+  {
     name: 'get_segment_contacts',
     description: 'Get contacts in a specific segment',
     inputSchema: {
@@ -69,6 +108,30 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const response = await client.v1.post('/segments/new', args);
     return {
       content: [{ type: 'text', text: `Segment created successfully:\n${JSON.stringify(response.data.list, null, 2)}` }],
+    };
+  },
+
+  async get_segment(client: MauticApiClient, args: any) {
+    const { id } = args;
+    const response = await client.v1.get(`/segments/${id}`);
+    return {
+      content: [{ type: 'text', text: `Segment details:\n${JSON.stringify(response.data.list, null, 2)}` }],
+    };
+  },
+
+  async update_segment(client: MauticApiClient, args: any) {
+    const { id, ...updateData } = args;
+    const response = await client.v1.patch(`/segments/${id}/edit`, updateData);
+    return {
+      content: [{ type: 'text', text: `Segment ${id} updated successfully:\n${JSON.stringify(response.data.list, null, 2)}` }],
+    };
+  },
+
+  async delete_segment(client: MauticApiClient, args: any) {
+    const { id } = args;
+    await client.v1.delete(`/segments/${id}/delete`);
+    return {
+      content: [{ type: 'text', text: `Segment ${id} deleted successfully` }],
     };
   },
 

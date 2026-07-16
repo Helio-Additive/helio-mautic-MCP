@@ -1,5 +1,85 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
+import { setLimitedParam, setParam } from './utils.js';
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function normalizeChart(chart: any): Record<string, unknown> {
+  const labels = Array.isArray(chart?.labels) ? chart.labels : [];
+  const datasets = Array.isArray(chart?.datasets) ? chart.datasets : [];
+
+  return {
+    labels,
+    datasets: datasets.map((dataset: any) => {
+      const data = Array.isArray(dataset?.data) ? dataset.data.map((value: unknown) => Number(value ?? 0)) : [];
+
+      return {
+        label: dataset?.label ?? null,
+        data,
+        total: data.reduce((sum: number, value: number) => sum + value, 0),
+      };
+    }),
+  };
+}
+
+function extractChartsFromHtml(html: string): Record<string, unknown>[] {
+  return Array.from(html.matchAll(/<canvas[^>]*>([\s\S]*?)<\/canvas>/g))
+    .map(match => decodeHtmlEntities(match[1].trim()))
+    .filter(Boolean)
+    .map((raw, index) => {
+      try {
+        return normalizeChart(JSON.parse(raw));
+      } catch (error) {
+        return {
+          index,
+          parseError: error instanceof Error ? error.message : 'Failed to parse chart data',
+          rawPreview: raw.slice(0, 120),
+        };
+      }
+    });
+}
+
+function readAttribute(attributes: string, name: string): string | null {
+  const match = attributes.match(new RegExp(`${name}="([^"]*)"`));
+  return match ? decodeHtmlEntities(match[1]) : null;
+}
+
+function stripTags(value: string): string {
+  return value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function extractMapOptionsFromHtml(html: string): Record<string, unknown>[] {
+  return Array.from(html.matchAll(/<label\b([^>]*)>([\s\S]*?)<\/label>/g))
+    .filter(match => match[1].includes('data-map-option'))
+    .map((match, index) => {
+      const attributes = match[1];
+      const seriesRaw = readAttribute(attributes, 'data-map-series') ?? '[]';
+      let series: unknown = [];
+
+      try {
+        series = JSON.parse(seriesRaw);
+      } catch (error) {
+        series = {
+          parseError: error instanceof Error ? error.message : 'Failed to parse map series',
+          rawPreview: seriesRaw.slice(0, 120),
+        };
+      }
+
+      return {
+        index,
+        label: stripTags(match[2]),
+        statUnit: readAttribute(attributes, 'data-stat-unit'),
+        legendText: readAttribute(attributes, 'data-legend-text'),
+        series,
+      };
+    });
+}
 
 export const toolDefinitions: ToolDefinition[] = [
   // Existing campaign tools
@@ -45,6 +125,18 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'add_contact_to_campaign',
     description: 'Add a contact to a campaign',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        campaignId: { type: 'number', description: 'Campaign ID' },
+        contactId: { type: 'number', description: 'Contact ID' },
+      },
+      required: ['campaignId', 'contactId'],
+    },
+  },
+  {
+    name: 'remove_contact_from_campaign',
+    description: 'Remove a contact from a campaign',
     inputSchema: {
       type: 'object',
       properties: {
@@ -190,15 +282,42 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['campaignId', 'dateFrom', 'dateTo'],
     },
   },
+  {
+    name: 'get_campaign_email_metrics_v6',
+    description: 'Get Mautic 6 campaign email metrics by weekday or hour from authenticated web stats routes',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        campaignId: { type: 'number', description: 'Campaign ID' },
+        groupBy: { type: 'string', enum: ['weekdays', 'hours'], description: 'Group campaign email metrics by weekdays or hours' },
+        dateFrom: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+        dateTo: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+      },
+      required: ['campaignId', 'groupBy', 'dateFrom', 'dateTo'],
+    },
+  },
+  {
+    name: 'get_campaign_map_stats_v6',
+    description: 'Get Mautic 6 campaign geographic map statistics from the authenticated web stats route',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        campaignId: { type: 'number', description: 'Campaign ID' },
+        dateFrom: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+        dateTo: { type: 'string', description: 'End date (YYYY-MM-DD)' },
+      },
+      required: ['campaignId', 'dateFrom', 'dateTo'],
+    },
+  },
 ];
 
 export const toolHandlers: Record<string, ToolHandler> = {
   async list_campaigns(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.search) params.search = args.search;
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
-    if (args?.start) params.start = args.start;
-    if (args?.publishedOnly) params.publishedOnly = args.publishedOnly;
+    setParam(params, 'search', args?.search);
+    setLimitedParam(params, 'limit', args?.limit, 200);
+    setParam(params, 'start', args?.start);
+    setParam(params, 'publishedOnly', args?.publishedOnly);
 
     const response = await client.v1.get('/campaigns', { params });
     return {
@@ -229,6 +348,14 @@ export const toolHandlers: Record<string, ToolHandler> = {
     };
   },
 
+  async remove_contact_from_campaign(client: MauticApiClient, args: any) {
+    const { campaignId, contactId } = args;
+    await client.v1.post(`/campaigns/${campaignId}/contact/${contactId}/remove`);
+    return {
+      content: [{ type: 'text', text: `Contact ${contactId} removed from campaign ${campaignId} successfully` }],
+    };
+  },
+
   async create_campaign_with_automation(client: MauticApiClient, args: any) {
     const payload: any = {
       name: args.name,
@@ -240,7 +367,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
     if (args.events?.length > 0) payload.events = args.events;
     if (args.segments?.length > 0) payload.lists = args.segments.map((id: number) => ({ id }));
     if (args.forms?.length > 0) payload.forms = args.forms.map((id: number) => ({ id }));
-    if (args.canvasSettings) payload.canvasSettings = args.canvasSettings;
+    setParam(payload, 'canvasSettings', args.canvasSettings);
 
     const response = await client.v1.post('/campaigns/new', payload);
     return {
@@ -262,8 +389,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
   async get_campaign_contacts(client: MauticApiClient, args: any) {
     const { campaignId, start, limit } = args;
     const params: any = {};
-    if (start) params.start = start;
-    if (limit) params.limit = Math.min(limit, 200);
+    setParam(params, 'start', start);
+    setLimitedParam(params, 'limit', limit, 200);
 
     const response = await client.v1.get(`/campaigns/${campaignId}/contacts`, { params });
     return {
@@ -299,8 +426,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
   async get_campaign_event_details(client: MauticApiClient, args: any) {
     const { eventId, limit, start } = args;
     const params: any = {};
-    if (limit) params.limit = Math.min(limit, 200);
-    if (start) params.start = start;
+    setLimitedParam(params, 'limit', limit, 200);
+    setParam(params, 'start', start);
 
     const response = await client.v1.get(`/campaigns/events/${eventId}`, { params });
     return {
@@ -325,6 +452,46 @@ export const toolHandlers: Record<string, ToolHandler> = {
     });
     return {
       content: [{ type: 'text', text: `Campaign ${campaignId} map stats (${dateFrom} to ${dateTo}):\n${JSON.stringify(response.data, null, 2)}` }],
+    };
+  },
+
+  async get_campaign_email_metrics_v6(client: MauticApiClient, args: any) {
+    const { campaignId, groupBy, dateFrom, dateTo } = args;
+    const route = groupBy === 'hours' ? 'email-hours' : 'email-weekdays';
+    const path = `/campaign/metrics/${route}/${encodeURIComponent(campaignId)}/${encodeURIComponent(dateFrom)}/${encodeURIComponent(dateTo)}`;
+    const response = await client.web.get(path);
+    const charts = extractChartsFromHtml(response.data);
+    const result = {
+      source: path,
+      campaignId,
+      groupBy,
+      dateFrom,
+      dateTo,
+      charts,
+      note: charts.length ? undefined : 'Mautic returned no chart canvases for this campaign/range.',
+    };
+
+    return {
+      content: [{ type: 'text', text: `Mautic 6 campaign ${campaignId} email metrics (${groupBy}, ${dateFrom} to ${dateTo}):\n${JSON.stringify(result, null, 2)}` }],
+    };
+  },
+
+  async get_campaign_map_stats_v6(client: MauticApiClient, args: any) {
+    const { campaignId, dateFrom, dateTo } = args;
+    const path = `/campaign-map-stats/${encodeURIComponent(campaignId)}/${encodeURIComponent(dateFrom)}/${encodeURIComponent(dateTo)}`;
+    const response = await client.web.get(path);
+    const options = extractMapOptionsFromHtml(response.data);
+    const result = {
+      source: path,
+      campaignId,
+      dateFrom,
+      dateTo,
+      options,
+      note: options.length ? undefined : 'Mautic returned no map options for this campaign/range.',
+    };
+
+    return {
+      content: [{ type: 'text', text: `Mautic 6 campaign ${campaignId} map stats (${dateFrom} to ${dateTo}):\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 };

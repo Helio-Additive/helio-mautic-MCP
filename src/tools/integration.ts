@@ -1,5 +1,6 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
+import { setLimitedParam, setParam } from './utils.js';
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -71,7 +72,7 @@ export const toolDefinitions: ToolDefinition[] = [
 export const toolHandlers: Record<string, ToolHandler> = {
   async list_webhooks(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
+    setLimitedParam(params, 'limit', args?.limit, 200);
 
     const response = await client.v1.get('/hooks', { params });
     return {
@@ -86,8 +87,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
       triggers: args.triggers,
       eventsOrderbyDir: args.eventsOrderbyDir || 'DESC',
     };
-    if (args.description) payload.description = args.description;
-    if (args.secret) payload.secret = args.secret;
+    setParam(payload, 'description', args.description);
+    setParam(payload, 'secret', args.secret);
 
     const response = await client.v1.post('/hooks/new', payload);
     return {
@@ -109,7 +110,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async list_reports(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
+    setLimitedParam(params, 'limit', args?.limit, 200);
 
     const response = await client.v1.get('/reports', { params });
     return {
@@ -123,9 +124,9 @@ export const toolHandlers: Record<string, ToolHandler> = {
       source: args.source,
       columns: args.columns,
     };
-    if (args.description) payload.description = args.description;
-    if (args.filters) payload.filters = args.filters;
-    if (args.groupBy) payload.groupBy = args.groupBy;
+    setParam(payload, 'description', args.description);
+    setParam(payload, 'filters', args.filters);
+    setParam(payload, 'groupBy', args.groupBy);
 
     const response = await client.v1.post('/reports/new', payload);
     return {

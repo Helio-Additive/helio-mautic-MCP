@@ -5,6 +5,7 @@ import type { OAuth2Token } from '../types/index.js';
 export class MauticApiClient {
   public v1: AxiosInstance;
   public v2: AxiosInstance;
+  public web: AxiosInstance;
   private token: OAuth2Token | null = null;
   private baseUrl: string;
   private clientId: string;
@@ -39,8 +40,19 @@ export class MauticApiClient {
       },
     });
 
+    // Mautic 6 exposes some stats views as authenticated web routes under /s/.
+    const webBaseUrl = this.baseUrl.replace(/\/?$/, '').replace(/\/api\/?$/, '') + '/s/';
+    this.web = axios.create({
+      baseURL: webBaseUrl,
+      timeout: 30000,
+      headers: {
+        'Accept': 'text/html,application/json',
+      },
+    });
+
     this.setupInterceptors(this.v1);
     this.setupInterceptors(this.v2);
+    this.setupInterceptors(this.web);
   }
 
   private setupInterceptors(instance: AxiosInstance) {
