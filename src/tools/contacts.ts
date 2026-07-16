@@ -1,6 +1,7 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
+import { normalizeContact, normalizeContacts, setLimitedParam, setParam } from './utils.js';
 
 function buildContactPayload(args: any) {
   const { firstName, lastName, customFields, ...rest } = args;
@@ -26,7 +27,7 @@ export const toolDefinitions: ToolDefinition[] = [
         phone: { type: 'string', description: 'Phone number' },
         company: { type: 'string', description: 'Company name' },
         position: { type: 'string', description: 'Job position' },
-        customFields: { type: 'object', description: 'Custom field values' },
+        customFields: { type: 'object', description: 'Custom field values keyed by Mautic field alias' },
       },
       required: ['email'],
     },
@@ -44,7 +45,7 @@ export const toolDefinitions: ToolDefinition[] = [
         phone: { type: 'string', description: 'Phone number' },
         company: { type: 'string', description: 'Company name' },
         position: { type: 'string', description: 'Job position' },
-        customFields: { type: 'object', description: 'Custom field values' },
+        customFields: { type: 'object', description: 'Custom field values keyed by Mautic field alias' },
       },
       required: ['id'],
     },
@@ -57,6 +58,9 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         id: { type: 'number', description: 'Contact ID' },
         email: { type: 'string', description: 'Contact email address' },
+        minimal: { type: 'boolean', description: 'Return normalized contact data instead of full Mautic metadata' },
+        fieldsOnly: { type: 'boolean', description: 'Return only normalized contact field values plus id' },
+        fields: { type: 'array', items: { type: 'string' }, description: 'Field aliases to include when minimal or fieldsOnly is true' },
       },
     },
   },
@@ -72,7 +76,9 @@ export const toolDefinitions: ToolDefinition[] = [
         orderBy: { type: 'string', description: 'Field to order by' },
         orderByDir: { type: 'string', enum: ['ASC', 'DESC'], description: 'Order direction' },
         publishedOnly: { type: 'boolean', description: 'Only published contacts' },
-        minimal: { type: 'boolean', description: 'Return minimal contact data' },
+        minimal: { type: 'boolean', description: 'Return normalized contact data instead of full Mautic metadata' },
+        fieldsOnly: { type: 'boolean', description: 'Return only normalized contact field values plus id' },
+        fields: { type: 'array', items: { type: 'string' }, description: 'Field aliases to include when minimal or fieldsOnly is true' },
       },
     },
   },
@@ -118,10 +124,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async get_contact(client: MauticApiClient, args: any) {
-    const { id, email } = args;
+    const { id, email, minimal, fieldsOnly, fields } = args;
     let response;
 
-    if (id) {
+    if (id !== undefined) {
       response = await client.v1.get(`/contacts/${id}`);
     } else if (email) {
       const searchResponse = await client.v1.get('/contacts', {
@@ -136,24 +142,36 @@ export const toolHandlers: Record<string, ToolHandler> = {
       throw new McpError(ErrorCode.InvalidParams, 'Either id or email must be provided');
     }
 
+    const contact = response.data.contact;
+    const output = fieldsOnly
+      ? { id: contact?.id, fields: normalizeContact(contact, fields).fields }
+      : minimal
+        ? normalizeContact(contact, fields)
+        : contact;
+
     return {
-      content: [{ type: 'text', text: `Contact details:\n${JSON.stringify(response.data.contact, null, 2)}` }],
+      content: [{ type: 'text', text: `Contact details:\n${JSON.stringify(output, null, 2)}` }],
     };
   },
 
   async search_contacts(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.search) params.search = args.search;
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
-    if (args?.start) params.start = args.start;
-    if (args?.orderBy) params.orderBy = args.orderBy;
-    if (args?.orderByDir) params.orderByDir = args.orderByDir;
-    if (args?.publishedOnly) params.publishedOnly = args.publishedOnly;
-    if (args?.minimal) params.minimal = args.minimal;
+    setParam(params, 'search', args?.search);
+    setLimitedParam(params, 'limit', args?.limit, 200);
+    setParam(params, 'start', args?.start);
+    setParam(params, 'orderBy', args?.orderBy);
+    setParam(params, 'orderByDir', args?.orderByDir);
+    setParam(params, 'publishedOnly', args?.publishedOnly);
 
     const response = await client.v1.get('/contacts', { params });
+    const contacts = args?.fieldsOnly
+      ? normalizeContacts(response.data.contacts, args?.fields).map(contact => ({ id: contact.id, fields: contact.fields }))
+      : args?.minimal
+        ? normalizeContacts(response.data.contacts, args?.fields)
+        : response.data.contacts;
+
     return {
-      content: [{ type: 'text', text: `Found ${response.data.total} contacts:\n${JSON.stringify(response.data.contacts, null, 2)}` }],
+      content: [{ type: 'text', text: `Found ${response.data.total} contacts:\n${JSON.stringify(contacts, null, 2)}` }],
     };
   },
 

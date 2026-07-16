@@ -1,5 +1,6 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
+import { normalizeContact, setLimitedParam, setParam } from './utils.js';
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -96,12 +97,24 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'add_contact_tags',
-    description: 'Add tags to contact',
+    description: 'Add tags to contact using the Mautic v1 contact edit endpoint',
     inputSchema: {
       type: 'object',
       properties: {
         contactId: { type: 'number', description: 'Contact ID' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Array of tag names' },
+      },
+      required: ['contactId', 'tags'],
+    },
+  },
+  {
+    name: 'remove_contact_tags',
+    description: 'Remove tags from contact using the Mautic v1 contact edit endpoint',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'number', description: 'Contact ID' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Array of tag names to remove' },
       },
       required: ['contactId', 'tags'],
     },
@@ -137,9 +150,9 @@ export const toolDefinitions: ToolDefinition[] = [
 export const toolHandlers: Record<string, ToolHandler> = {
   async list_companies(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.search) params.search = args.search;
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
-    if (args?.start) params.start = args.start;
+    setParam(params, 'search', args?.search);
+    setLimitedParam(params, 'limit', args?.limit, 200);
+    setParam(params, 'start', args?.start);
 
     const response = await client.v1.get('/companies', { params });
     return {
@@ -164,8 +177,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async create_note(client: MauticApiClient, args: any) {
     const payload: any = { text: args.text, type: args.type || 'general' };
-    if (args.contactId) payload.contact = args.contactId;
-    if (args.companyId) payload.company = args.companyId;
+    setParam(payload, 'contact', args.contactId);
+    setParam(payload, 'company', args.companyId);
 
     const response = await client.v1.post('/notes/new', payload);
     return {
@@ -176,7 +189,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
   async get_contact_notes(client: MauticApiClient, args: any) {
     const { contactId, limit } = args;
     const params: any = {};
-    if (limit) params.limit = Math.min(limit, 200);
+    setLimitedParam(params, 'limit', limit, 200);
 
     const response = await client.v1.get(`/contacts/${contactId}/notes`, { params });
     return {
@@ -186,8 +199,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async list_tags(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.search) params.search = args.search;
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
+    setParam(params, 'search', args?.search);
+    setLimitedParam(params, 'limit', args?.limit, 200);
 
     const response = await client.v1.get('/tags', { params });
     return {
@@ -204,16 +217,26 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async add_contact_tags(client: MauticApiClient, args: any) {
     const { contactId, tags } = args;
-    const response = await client.v1.post(`/contacts/${contactId}/contact/add`, { tags });
+    const response = await client.v1.patch(`/contacts/${contactId}/edit`, { tags: tags.join(',') });
     return {
-      content: [{ type: 'text', text: `Tags added to contact ${contactId} successfully:\n${JSON.stringify(response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Tags added to contact ${contactId} successfully:\n${JSON.stringify(normalizeContact(response.data.contact), null, 2)}` }],
+    };
+  },
+
+  async remove_contact_tags(client: MauticApiClient, args: any) {
+    const { contactId, tags } = args;
+    const response = await client.v1.patch(`/contacts/${contactId}/edit`, {
+      tags: tags.map((tag: string) => `-${tag}`).join(','),
+    });
+    return {
+      content: [{ type: 'text', text: `Tags removed from contact ${contactId} successfully:\n${JSON.stringify(normalizeContact(response.data.contact), null, 2)}` }],
     };
   },
 
   async list_categories(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.bundle) params.bundle = args.bundle;
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
+    setParam(params, 'bundle', args?.bundle);
+    setLimitedParam(params, 'limit', args?.limit, 200);
 
     const response = await client.v1.get('/categories', { params });
     return {
