@@ -1,5 +1,6 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
+import { setLimitedParam, setParam } from './utils.js';
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -46,10 +47,10 @@ export const toolDefinitions: ToolDefinition[] = [
 export const toolHandlers: Record<string, ToolHandler> = {
   async list_forms(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.search) params.search = args.search;
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
-    if (args?.start) params.start = args.start;
-    if (args?.publishedOnly) params.publishedOnly = args.publishedOnly;
+    setParam(params, 'search', args?.search);
+    setLimitedParam(params, 'limit', args?.limit, 200);
+    setParam(params, 'start', args?.start);
+    setParam(params, 'publishedOnly', args?.publishedOnly);
 
     const response = await client.v1.get('/forms', { params });
     return {
@@ -68,10 +69,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
   async get_form_submissions(client: MauticApiClient, args: any) {
     const { formId, limit, start, dateFrom, dateTo } = args;
     const params: any = {};
-    if (limit) params.limit = Math.min(limit, 200);
-    if (start) params.start = start;
-    if (dateFrom) params.dateFrom = dateFrom;
-    if (dateTo) params.dateTo = dateTo;
+    setLimitedParam(params, 'limit', limit, 200);
+    setParam(params, 'start', start);
+    setParam(params, 'dateFrom', dateFrom);
+    setParam(params, 'dateTo', dateTo);
 
     const response = await client.v1.get(`/forms/${formId}/submissions`, { params });
     return {

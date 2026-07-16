@@ -90,6 +90,8 @@ Move complete campaign setups between environments.
 - **get_campaign_event_details** - Detailed metrics for campaign events
 - **get_campaign_graph_stats** - Campaign graph statistics for date ranges
 - **get_campaign_map_stats** - Geographic map statistics
+- **get_campaign_email_metrics_v6** - Mautic 6 campaign email sent/read/clicked metrics by weekday or hour
+- **get_campaign_map_stats_v6** - Mautic 6 geographic map statistics via authenticated web stats route
 
 ### Segment-Based Email Sending
 - **send_email_to_segment** - Send email to assigned segments with real-time audience adaptation
@@ -97,6 +99,8 @@ Move complete campaign setups between environments.
 ### Email Reply Tracking
 - **record_email_reply** - Record email replies by tracking hash
 - **get_email_graph_stats** - Email graph statistics for date ranges
+- **get_email_stats_v6** - Mautic 6 aggregate counters
+- **get_email_graph_stats_v6** - Mautic 6 graph statistics via authenticated web stats route
 
 ### Deprecation Notice
 SMS API classes have been removed in Mautic 7. The `list_sms` and `create_sms` tools include deprecation warnings.
@@ -108,19 +112,25 @@ SMS API classes have been removed in Mautic 7. The `list_sms` and `create_sms` t
 - Secure credential management through environment variables
 - Dual API support: v1 (FOSRestBundle) and v2 (API Platform)
 
-### Contact Management (6 tools)
+### Contact Management (11 tools)
 - **create_contact** - Create new contacts with custom fields
 - **update_contact** - Update existing contact information
 - **get_contact** - Retrieve contact details by ID or email
 - **search_contacts** - Search contacts with filters and pagination
+- **get_contact_preferences** - Read contact DNC, frequency rules, owner, tags, segments, and campaigns
 - **delete_contact** - Remove contacts from Mautic
+- **assign_contact_owner** - Assign or clear a contact owner
+- **add_contact_dnc** - Add Do Not Contact status for a contact channel
+- **remove_contact_dnc** - Remove Do Not Contact status for a contact channel
 - **add_contact_to_segment** - Add contacts to specific segments
+- **remove_contact_from_segment** - Remove contacts from specific segments
 
-### Campaign Management (13 tools)
+### Campaign Management (16 tools)
 - **list_campaigns** - Get all campaigns with status and statistics
 - **get_campaign** - Get detailed campaign information
 - **create_campaign** - Create new campaigns
 - **add_contact_to_campaign** - Add contacts to campaigns
+- **remove_contact_from_campaign** - Remove contacts from campaigns
 - **create_campaign_with_automation** - Create campaigns with full event automation
 - **execute_campaign** - Manually execute/trigger campaigns
 - **get_campaign_contacts** - Get contacts in a campaign with their status
@@ -130,8 +140,10 @@ SMS API classes have been removed in Mautic 7. The `list_sms` and `create_sms` t
 - **get_campaign_event_details** - Campaign event metrics (Mautic 7)
 - **get_campaign_graph_stats** - Campaign graph statistics (Mautic 7)
 - **get_campaign_map_stats** - Campaign geographic stats (Mautic 7)
+- **get_campaign_email_metrics_v6** - Campaign email metrics by weekday or hour (Mautic 6)
+- **get_campaign_map_stats_v6** - Campaign geographic stats (Mautic 6)
 
-### Email Operations (8 tools)
+### Email Operations (10 tools)
 - **send_email** - Send emails to specific contacts
 - **list_emails** - Get all email templates and campaigns
 - **get_email** - Get detailed email information
@@ -140,15 +152,20 @@ SMS API classes have been removed in Mautic 7. The `list_sms` and `create_sms` t
 - **send_email_to_segment** - Send email to segments (Mautic 7)
 - **record_email_reply** - Record email reply by tracking hash (Mautic 7)
 - **get_email_graph_stats** - Email graph statistics (Mautic 7)
+- **get_email_stats_v6** - Email aggregate counters from the Mautic 6 email detail endpoint
+- **get_email_graph_stats_v6** - Email graph statistics via the Mautic 6 web stats route
 
 ### Form Management (3 tools)
 - **list_forms** - Get all forms with submission counts
 - **get_form** - Get form details and fields
 - **get_form_submissions** - Get form submission data
 
-### Segment Management (3 tools)
+### Segment Management (6 tools)
 - **list_segments** - Get all contact segments
 - **create_segment** - Create new contact segments with filters
+- **get_segment** - Get contact segment details
+- **update_segment** - Update contact segment metadata and filters
+- **delete_segment** - Delete contact segments
 - **get_segment_contacts** - Get contacts in a specific segment
 
 ### Content Management (7 tools)
@@ -160,7 +177,7 @@ SMS API classes have been removed in Mautic 7. The `list_sms` and `create_sms` t
 - **list_sms** - Get all SMS templates [DEPRECATED in Mautic 7]
 - **create_sms** - Create SMS templates [DEPRECATED in Mautic 7]
 
-### Business Entities (10 tools)
+### Business Entities (11 tools)
 - **list_companies** - Get all companies
 - **create_company** - Create new companies
 - **add_contact_to_company** - Associate contacts with companies
@@ -169,6 +186,7 @@ SMS API classes have been removed in Mautic 7. The `list_sms` and `create_sms` t
 - **list_tags** - Get all available tags
 - **create_tag** - Create new tags
 - **add_contact_tags** - Add tags to contacts
+- **remove_contact_tags** - Remove tags from contacts
 - **list_categories** - Get all categories
 - **create_category** - Create new categories
 

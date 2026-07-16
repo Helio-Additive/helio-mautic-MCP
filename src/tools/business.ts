@@ -147,6 +147,35 @@ export const toolDefinitions: ToolDefinition[] = [
   },
 ];
 
+function normalizeTagNames(tags: unknown): string[] {
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+
+  return tags
+    .map(tag => String(tag).trim())
+    .filter(Boolean);
+}
+
+function currentTagNames(contact: any): string[] {
+  const tags = contact?.tags;
+
+  if (Array.isArray(tags)) {
+    return tags.map((tag: any) => String(tag?.tag ?? tag?.name ?? tag)).filter(Boolean);
+  }
+
+  return Object.values(tags ?? {}).map((tag: any) => String(tag?.tag ?? tag?.name ?? tag)).filter(Boolean);
+}
+
+function tagMutationResult(contactId: number, requestedTags: string[], contact: any): Record<string, unknown> {
+  return {
+    contactId,
+    requestedTags,
+    currentTags: currentTagNames(contact),
+    contact: normalizeContact(contact),
+  };
+}
+
 export const toolHandlers: Record<string, ToolHandler> = {
   async list_companies(client: MauticApiClient, args: any) {
     const params: any = {};
@@ -216,20 +245,40 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async add_contact_tags(client: MauticApiClient, args: any) {
-    const { contactId, tags } = args;
+    const { contactId } = args;
+    const tags = normalizeTagNames(args.tags);
+
+    if (!tags.length) {
+      return {
+        content: [{ type: 'text', text: 'No tags provided. Provide at least one non-empty tag name.' }],
+      };
+    }
+
     const response = await client.v1.patch(`/contacts/${contactId}/edit`, { tags: tags.join(',') });
+    const result = tagMutationResult(contactId, tags, response.data.contact);
+
     return {
-      content: [{ type: 'text', text: `Tags added to contact ${contactId} successfully:\n${JSON.stringify(normalizeContact(response.data.contact), null, 2)}` }],
+      content: [{ type: 'text', text: `Tags added to contact ${contactId} successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async remove_contact_tags(client: MauticApiClient, args: any) {
-    const { contactId, tags } = args;
+    const { contactId } = args;
+    const tags = normalizeTagNames(args.tags);
+
+    if (!tags.length) {
+      return {
+        content: [{ type: 'text', text: 'No tags provided. Provide at least one non-empty tag name.' }],
+      };
+    }
+
     const response = await client.v1.patch(`/contacts/${contactId}/edit`, {
       tags: tags.map((tag: string) => `-${tag}`).join(','),
     });
+    const result = tagMutationResult(contactId, tags, response.data.contact);
+
     return {
-      content: [{ type: 'text', text: `Tags removed from contact ${contactId} successfully:\n${JSON.stringify(normalizeContact(response.data.contact), null, 2)}` }],
+      content: [{ type: 'text', text: `Tags removed from contact ${contactId} successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 

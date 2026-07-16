@@ -1,5 +1,6 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
+import { setLimitedParam, setParam } from './utils.js';
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -101,10 +102,10 @@ export const toolDefinitions: ToolDefinition[] = [
 export const toolHandlers: Record<string, ToolHandler> = {
   async list_assets(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.search) params.search = args.search;
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
-    if (args?.start) params.start = args.start;
-    if (args?.publishedOnly) params.publishedOnly = args.publishedOnly;
+    setParam(params, 'search', args?.search);
+    setLimitedParam(params, 'limit', args?.limit, 200);
+    setParam(params, 'start', args?.start);
+    setParam(params, 'publishedOnly', args?.publishedOnly);
 
     const response = await client.v1.get('/assets', { params });
     return {
@@ -133,7 +134,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
     } else {
       payload.remotePath = args.file;
     }
-    if (args.category) payload.category = args.category;
+    setParam(payload, 'category', args.category);
 
     const response = await client.v1.post('/assets/new', payload);
     return {
@@ -143,10 +144,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async list_pages(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.search) params.search = args.search;
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
-    if (args?.start) params.start = args.start;
-    if (args?.publishedOnly) params.publishedOnly = args.publishedOnly;
+    setParam(params, 'search', args?.search);
+    setLimitedParam(params, 'limit', args?.limit, 200);
+    setParam(params, 'start', args?.start);
+    setParam(params, 'publishedOnly', args?.publishedOnly);
 
     const response = await client.v1.get('/pages', { params });
     return {
@@ -159,11 +160,11 @@ export const toolHandlers: Record<string, ToolHandler> = {
       title: args.title,
       isPublished: args.isPublished !== undefined ? args.isPublished : true,
     };
-    if (args.alias) payload.alias = args.alias;
-    if (args.customHtml) payload.customHtml = args.customHtml;
-    if (args.template) payload.template = args.template;
-    if (args.publishUp) payload.publishUp = args.publishUp;
-    if (args.publishDown) payload.publishDown = args.publishDown;
+    setParam(payload, 'alias', args.alias);
+    setParam(payload, 'customHtml', args.customHtml);
+    setParam(payload, 'template', args.template);
+    setParam(payload, 'publishUp', args.publishUp);
+    setParam(payload, 'publishDown', args.publishDown);
 
     const response = await client.v1.post('/pages/new', payload);
     return {
@@ -173,8 +174,8 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async list_sms(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.search) params.search = args.search;
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
+    setParam(params, 'search', args?.search);
+    setLimitedParam(params, 'limit', args?.limit, 200);
 
     const response = await client.v1.get('/smses', { params });
     return {

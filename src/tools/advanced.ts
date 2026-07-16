@@ -1,5 +1,6 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
+import { setLimitedParam, setParam } from './utils.js';
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -129,7 +130,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async list_stages(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
+    setLimitedParam(params, 'limit', args?.limit, 200);
 
     const response = await client.v1.get('/stages', { params });
     return {
@@ -147,7 +148,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async list_contact_fields(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
+    setLimitedParam(params, 'limit', args?.limit, 200);
 
     const response = await client.v1.get('/fields/contact', { params });
     return {
@@ -162,9 +163,9 @@ export const toolHandlers: Record<string, ToolHandler> = {
       isRequired: args.isRequired || false,
       isPubliclyUpdatable: args.isPubliclyUpdatable || false,
     };
-    if (args.alias) payload.alias = args.alias;
-    if (args.defaultValue) payload.defaultValue = args.defaultValue;
-    if (args.properties) payload.properties = args.properties;
+    setParam(payload, 'alias', args.alias);
+    setParam(payload, 'defaultValue', args.defaultValue);
+    setParam(payload, 'properties', args.properties);
 
     const response = await client.v1.post('/fields/contact/new', payload);
     return {
@@ -175,12 +176,12 @@ export const toolHandlers: Record<string, ToolHandler> = {
   async get_contact_activity(client: MauticApiClient, args: any) {
     const { contactId, search, includeEvents, excludeEvents, dateFrom, dateTo, limit } = args;
     const params: any = {};
-    if (search) params.search = search;
-    if (includeEvents) params.includeEvents = includeEvents;
-    if (excludeEvents) params.excludeEvents = excludeEvents;
-    if (dateFrom) params.dateFrom = dateFrom;
-    if (dateTo) params.dateTo = dateTo;
-    if (limit) params.limit = Math.min(limit, 200);
+    setParam(params, 'search', search);
+    setParam(params, 'includeEvents', includeEvents);
+    setParam(params, 'excludeEvents', excludeEvents);
+    setParam(params, 'dateFrom', dateFrom);
+    setParam(params, 'dateTo', dateTo);
+    setLimitedParam(params, 'limit', limit, 200);
 
     const response = await client.v1.get(`/contacts/${contactId}/activity`, { params });
     return {

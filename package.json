@@ -1,6 +1,6 @@
 {
-  "name": "helio-mautic-mcp",
-  "version": "0.1.1",
+  "name": "mautic-mcp",
+  "version": "0.1.2",
   "description": "Helio local fork of a Mautic MCP server, tested with Mautic 6.0.7",
   "private": true,
   "type": "module",
