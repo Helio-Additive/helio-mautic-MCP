@@ -2,6 +2,17 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
 
+function buildContactPayload(args: any) {
+  const { firstName, lastName, customFields, ...rest } = args;
+
+  return {
+    ...rest,
+    ...customFields,
+    ...(firstName !== undefined ? { firstname: firstName } : {}),
+    ...(lastName !== undefined ? { lastname: lastName } : {}),
+  };
+}
+
 export const toolDefinitions: ToolDefinition[] = [
   {
     name: 'create_contact',
@@ -92,7 +103,7 @@ export const toolDefinitions: ToolDefinition[] = [
 
 export const toolHandlers: Record<string, ToolHandler> = {
   async create_contact(client: MauticApiClient, args: any) {
-    const response = await client.v1.post('/contacts/new', args);
+    const response = await client.v1.post('/contacts/new', buildContactPayload(args));
     return {
       content: [{ type: 'text', text: `Contact created successfully:\n${JSON.stringify(response.data.contact, null, 2)}` }],
     };
@@ -100,7 +111,7 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async update_contact(client: MauticApiClient, args: any) {
     const { id, ...updateData } = args;
-    const response = await client.v1.patch(`/contacts/${id}/edit`, updateData);
+    const response = await client.v1.patch(`/contacts/${id}/edit`, buildContactPayload(updateData));
     return {
       content: [{ type: 'text', text: `Contact updated successfully:\n${JSON.stringify(response.data.contact, null, 2)}` }],
     };
