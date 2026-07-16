@@ -1,5 +1,7 @@
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
+import { normalizeContacts, setLimitedParam, setParam } from './utils.js';
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -40,6 +42,9 @@ export const toolDefinitions: ToolDefinition[] = [
         segmentId: { type: 'number', description: 'Segment ID' },
         limit: { type: 'number', description: 'Number of results', maximum: 200 },
         start: { type: 'number', description: 'Starting offset' },
+        minimal: { type: 'boolean', description: 'Return normalized contact data instead of full Mautic metadata' },
+        fieldsOnly: { type: 'boolean', description: 'Return only normalized contact field values plus id' },
+        fields: { type: 'array', items: { type: 'string' }, description: 'Field aliases to include when minimal or fieldsOnly is true' },
       },
       required: ['segmentId'],
     },
@@ -49,10 +54,10 @@ export const toolDefinitions: ToolDefinition[] = [
 export const toolHandlers: Record<string, ToolHandler> = {
   async list_segments(client: MauticApiClient, args: any) {
     const params: any = {};
-    if (args?.search) params.search = args.search;
-    if (args?.limit) params.limit = Math.min(args.limit, 200);
-    if (args?.start) params.start = args.start;
-    if (args?.publishedOnly) params.publishedOnly = args.publishedOnly;
+    setParam(params, 'search', args?.search);
+    setLimitedParam(params, 'limit', args?.limit, 200);
+    setParam(params, 'start', args?.start);
+    setParam(params, 'publishedOnly', args?.publishedOnly);
 
     const response = await client.v1.get('/segments', { params });
     return {
@@ -68,14 +73,30 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async get_segment_contacts(client: MauticApiClient, args: any) {
-    const { segmentId, limit, start } = args;
+    const { segmentId, limit, start, minimal, fieldsOnly, fields } = args;
     const params: any = {};
-    if (limit) params.limit = Math.min(limit, 200);
-    if (start) params.start = start;
+    setLimitedParam(params, 'limit', limit, 200);
+    setParam(params, 'start', start);
 
-    const response = await client.v1.get(`/segments/${segmentId}/contacts`, { params });
+    const segmentsResponse = await client.v1.get('/segments', { params: { limit: 200 } });
+    const segments = Object.values(segmentsResponse.data.lists ?? {}) as any[];
+    const segment = segments.find((item: any) => Number(item.id) === Number(segmentId));
+
+    if (!segment?.alias) {
+      throw new McpError(ErrorCode.InvalidParams, `No segment alias found for segment ID ${segmentId}`);
+    }
+
+    params.search = `segment:${segment.alias}`;
+
+    const response = await client.v1.get('/contacts', { params });
+    const contacts = fieldsOnly
+      ? normalizeContacts(response.data.contacts, fields).map(contact => ({ id: contact.id, fields: contact.fields }))
+      : minimal
+        ? normalizeContacts(response.data.contacts, fields)
+        : response.data.contacts;
+
     return {
-      content: [{ type: 'text', text: `Found ${response.data.total} contacts in segment:\n${JSON.stringify(response.data.contacts, null, 2)}` }],
+      content: [{ type: 'text', text: `Found ${response.data.total} contacts in segment ${segment.alias}:\n${JSON.stringify(contacts, null, 2)}` }],
     };
   },
 };
