@@ -1,17 +1,18 @@
 {
-  "name": "mantic.dzind",
-  "version": "2.0.0",
-  "description": "A Model Context Protocol server for Mautic 7 (Columba Edition) marketing automation",
+  "name": "helio-mautic-mcp",
+  "version": "0.1.0",
+  "description": "Helio local fork of a Mautic MCP server, tested with Mautic 6.0.7",
   "private": true,
   "type": "module",
   "bin": {
-    "mantic.dzind": "./build/index.js"
+    "helio-mautic-mcp": "./build/index.js"
   },
   "files": [
     "build"
   ],
   "scripts": {
     "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
+    "check": "tsc --noEmit",
     "prepare": "npm run build",
     "watch": "tsc --watch",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js"

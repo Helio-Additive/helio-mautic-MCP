@@ -1,6 +1,52 @@
 # Mautic MCP Server
 
-A comprehensive Model Context Protocol (MCP) server for Mautic 7 (Columba Edition) marketing automation platform. Supports both v1 (FOSRestBundle) and v2 (API Platform) endpoints with 68 tools.
+Helio's local Model Context Protocol (MCP) server fork for Mautic. The fork is cloned locally by team members and used directly by Codex and Claude.
+
+Compatibility target: tested with Mautic 6.0.7.
+
+API v2 / Mautic 7 code is preserved from upstream and should be left untouched unless explicitly required.
+
+## Helio Local Workflow
+
+Keep `main` stable. Codex and Claude should point at `main` or a known-good tag.
+
+Use a branch for each fix, run the build before merging, then restart the local MCP process in Codex or Claude.
+
+```bash
+npm install
+npm run build
+```
+
+If `just` is available, the same local checks are:
+
+```bash
+just ready
+```
+
+After pulling changes, always rebuild and restart the MCP server. Pulling code is not enough if Codex or Claude still has the old `build/index.js` process running.
+
+Example local MCP command:
+
+```json
+{
+  "command": "node",
+  "args": ["/Users/jamesriggleman/code/helio-additive/helio-mautic-MCP/build/index.js"]
+}
+```
+
+## Versioning
+
+This fork uses lightweight local versioning:
+
+- `0.1.x` for bug fixes.
+- `0.2.x` for new tools or behavior.
+- Tags such as `local-2026-07-16` or `v0.1.0` mark known-good checkpoints.
+
+See [CHANGELOG.md](CHANGELOG.md) for local compatibility notes.
+
+## Upstream Context
+
+This fork started from a comprehensive Model Context Protocol (MCP) server for Mautic 7 (Columba Edition) marketing automation platform. Supports both v1 (FOSRestBundle) and v2 (API Platform) endpoints with 68 tools.
 
 [![GitHub Stars](https://img.shields.io/github/stars/Cbrown35/mantic-MCP?style=social)](https://github.com/Cbrown35/mantic-MCP/stargazers)
 [![GitHub Issues](https://img.shields.io/github/issues/Cbrown35/mantic-MCP)](https://github.com/Cbrown35/mantic-MCP/issues)
@@ -9,9 +55,9 @@ A comprehensive Model Context Protocol (MCP) server for Mautic 7 (Columba Editio
 ## Quick Start
 
 ```bash
-# Clone and setup
-git clone https://github.com/Cbrown35/mantic-MCP.git
-cd mantic-MCP
+# Clone and setup the Helio fork
+git clone <helio-fork-url>
+cd helio-mautic-MCP
 npm install
 
 # Configure your Mautic credentials
@@ -28,7 +74,7 @@ Then add the server to your MCP configuration and start using natural language c
 - "Clone campaign 5 and export it for staging"
 - "Send email template 12 to its assigned segment"
 
-## What's New in v2.0 (Mautic 7 Support)
+## Upstream v2.0 Notes (Mautic 7 Support)
 
 ### Projects (API v2)
 Organize marketing resources under a single logical structure using Mautic 7's new API Platform v2 endpoints.
@@ -155,14 +201,14 @@ SMS API classes have been removed in Mautic 7. The `list_sms` and `create_sms` t
 ### Prerequisites
 - Node.js (v16 or higher)
 - npm or yarn
-- Access to a Mautic 7 instance with API credentials
+- Access to a Mautic instance with API credentials. Helio tests this fork against Mautic 6.0.7.
 
 ### Setup
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/Cbrown35/mantic-MCP.git
-   cd mantic-MCP
+   git clone <helio-fork-url>
+   cd helio-mautic-MCP
    ```
 
 2. **Install dependencies:**
