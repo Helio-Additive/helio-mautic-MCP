@@ -82,12 +82,12 @@ Organize marketing resources under a single logical structure using Mautic 7's n
 
 ### Campaign Import/Export
 Move complete campaign setups between environments.
-- **clone_campaign** - Clone an existing campaign
-- **export_campaign** - Export campaign data with all related assets
-- **import_campaign** - Import a campaign from JSON data
+- **clone_campaign** - Managed v1 clone that recreates metadata, sources, events, and canvas settings
+- **export_campaign** - Managed portable campaign JSON export
+- **import_campaign** - Managed portable campaign JSON import
 
 ### Campaign Analytics
-- **get_campaign_event_details** - Detailed metrics for campaign events
+- **get_campaign_event_details** - Campaign event configuration/details
 - **get_campaign_graph_stats** - Campaign graph statistics for date ranges
 - **get_campaign_map_stats** - Geographic map statistics
 - **get_campaign_email_metrics_v6** - Mautic 6 campaign email sent/read/clicked metrics by weekday or hour
@@ -125,23 +125,34 @@ SMS API classes have been removed in Mautic 7. The `list_sms` and `create_sms` t
 - **add_contact_to_segment** - Add contacts to specific segments
 - **remove_contact_from_segment** - Remove contacts from specific segments
 
-### Campaign Management (16 tools)
-- **list_campaigns** - Get all campaigns with status and statistics
-- **get_campaign** - Get detailed campaign information
+### Campaign Management (18 tools)
+- **list_campaigns** - Get all campaigns with optional compact output
+- **get_campaign** - Get detailed campaign information with optional compact output
 - **create_campaign** - Create new campaigns
+- **update_campaign** - Update campaign metadata and publication state; structural changes are rejected
+- **delete_campaign** - Delete campaigns; requires confirmation unless campaign is clearly disposable/test data
 - **add_contact_to_campaign** - Add contacts to campaigns
 - **remove_contact_from_campaign** - Remove contacts from campaigns
-- **create_campaign_with_automation** - Create campaigns with full event automation
-- **execute_campaign** - Manually execute/trigger campaigns
-- **get_campaign_contacts** - Get contacts in a campaign with their status
-- **clone_campaign** - Clone an existing campaign (Mautic 7)
-- **export_campaign** - Export campaign data with assets (Mautic 7)
-- **import_campaign** - Import campaign from JSON data (Mautic 7)
-- **get_campaign_event_details** - Campaign event metrics (Mautic 7)
+- **create_campaign_with_automation** - Create validated, unpublished-by-default campaigns with full event automation
+- **execute_campaign** - Manually execute/trigger campaigns when the trigger route exists; guarded and reports unsupported on Mautic 6.0.7
+- **get_campaign_contacts** - Get paginated campaign membership rows, optionally enriched with normalized contact details
+- **clone_campaign** - Clone an existing campaign by recreating metadata, sources, events, and canvas settings
+- **export_campaign** - Export portable managed campaign JSON for metadata, sources, events, and canvas settings
+- **import_campaign** - Import portable managed campaign JSON through the Mautic v1 campaign create flow
+- **get_campaign_event_details** - Campaign event configuration/details
 - **get_campaign_graph_stats** - Campaign graph statistics (Mautic 7)
 - **get_campaign_map_stats** - Campaign geographic stats (Mautic 7)
 - **get_campaign_email_metrics_v6** - Campaign email metrics by weekday or hour (Mautic 6)
 - **get_campaign_map_stats_v6** - Campaign geographic stats (Mautic 6)
+
+#### Mautic 6.0.7 Campaign Compatibility Notes
+
+- The native `/campaigns/{id}/trigger` API route is unavailable; `execute_campaign` reports this clearly after applying safety guards.
+- The native clone route can create partial clones on Mautic 6.0.7, so `clone_campaign` uses a managed v1 recreate flow instead.
+- `export_campaign` and `import_campaign` use managed portable JSON instead of Mautic 7 import/export routes.
+- `update_campaign` is metadata-only; structural changes must use managed clone/import.
+- `create_campaign_with_automation` validates sources, events, parent references, decision paths, and canvas references before calling Mautic.
+- Segment-source campaigns are live-tested. Form-source campaigns and `email.send` event creation still require targeted live verification with safe disposable assets.
 
 ### Email Operations (10 tools)
 - **send_email** - Send emails to specific contacts

@@ -12,6 +12,10 @@ This repository is not currently deployed as a package or service. Keep the work
 - Keep existing API v2 / Mautic 7 code untouched unless the user explicitly asks to work on it.
 - Prefer fixing Mautic 6.0.7 compatibility in the v1/FOSRestBundle paths when possible.
 - Before changing request payload shapes, verify Mautic field aliases and endpoint expectations. The Mautic UI labels do not always match API field names.
+- Campaign trigger API is unavailable on Mautic 6.0.7; keep `execute_campaign` guarded and do not imply it can execute campaigns on that version.
+- Campaign clone/export/import are managed v1 flows for Mautic 6.0.7. Do not rely on native Mautic 7 campaign import/export routes for Mautic 6 compatibility.
+- `update_campaign` is metadata-only. Use managed clone/import for structural event, source, form, or canvas changes.
+- `create_campaign_with_automation` should validate campaign graph structure before sending payloads to Mautic and should default to unpublished unless explicitly requested.
 
 ## Local Commands
 
@@ -58,4 +62,3 @@ Do not add release automation, package publishing, or secret-based versioning un
 - Use branches or PRs for fixes.
 - Keep changes narrowly scoped to the MCP behavior requested.
 - Do not perform the contact API audit fixes unless the user explicitly resumes that audit work.
-

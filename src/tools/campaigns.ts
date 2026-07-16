@@ -1,6 +1,6 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
-import { setLimitedParam, setParam } from './utils.js';
+import { normalizeContact, setLimitedParam, setParam } from './utils.js';
 
 function decodeHtmlEntities(value: string): string {
   return value
@@ -54,6 +54,489 @@ function stripTags(value: string): string {
   return value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+const EVENT_BUILDER_PROPERTY_KEYS = new Set([
+  '_token',
+  'anchor',
+  'anchorEventType',
+  'buttons',
+  'campaignId',
+  'canvasSettings',
+  'changes',
+  'contactLog',
+  'deleted',
+  'description',
+  'eventType',
+  'failedCount',
+  'id',
+  'label',
+  'name',
+  'order',
+  'tempId',
+  'triggerDate',
+  'triggerHour',
+  'triggerInterval',
+  'triggerIntervalUnit',
+  'triggerMode',
+  'triggerRestrictedDaysOfWeek',
+  'triggerRestrictedStartHour',
+  'triggerRestrictedStopHour',
+  'triggerWindow',
+  'type',
+  'uuid',
+]);
+
+function flattenActionProperties(properties: any): Record<string, unknown> | null {
+  if (!properties || typeof properties !== 'object') return null;
+
+  const eventSpecificProperties = properties.properties && typeof properties.properties === 'object' ? properties.properties : {};
+  const sanitized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(eventSpecificProperties)) {
+    sanitized[key] = value;
+  }
+
+  for (const [key, value] of Object.entries(properties)) {
+    if (EVENT_BUILDER_PROPERTY_KEYS.has(key) || key === 'properties') continue;
+    if (sanitized[key] !== undefined) continue;
+    sanitized[key] = value;
+  }
+
+  return Object.keys(sanitized).length ? sanitized : null;
+}
+
+function normalizeCampaignEvent(event: any, includeRaw = false): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {
+    id: event?.id ?? null,
+    name: event?.name ?? null,
+    type: event?.type ?? null,
+    eventType: event?.eventType ?? null,
+    channel: event?.channel ?? null,
+    channelId: event?.channelId ?? null,
+    order: event?.order ?? null,
+    triggerMode: event?.triggerMode ?? null,
+    triggerInterval: event?.triggerInterval ?? null,
+    triggerIntervalUnit: event?.triggerIntervalUnit ?? null,
+    decisionPath: event?.decisionPath ?? null,
+    parentId: event?.parent?.id ?? null,
+    childIds: Array.isArray(event?.children) ? event.children.map((child: any) => child?.id).filter((id: unknown) => id != null) : [],
+  };
+
+  const properties = flattenActionProperties(event?.properties);
+  if (properties) normalized.properties = properties;
+  if (includeRaw) normalized.raw = event;
+
+  return normalized;
+}
+
+function normalizeCampaign(campaign: any, options: { includeEvents?: boolean; includeCanvas?: boolean; includeRaw?: boolean } = {}): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {
+    id: campaign?.id ?? null,
+    name: campaign?.name ?? null,
+    isPublished: campaign?.isPublished ?? null,
+    description: campaign?.description ? stripTags(String(campaign.description)) : null,
+    category: campaign?.category
+      ? {
+          id: campaign.category.id ?? null,
+          title: campaign.category.title ?? null,
+          alias: campaign.category.alias ?? null,
+        }
+      : null,
+    allowRestart: campaign?.allowRestart ?? null,
+    publishUp: campaign?.publishUp ?? null,
+    publishDown: campaign?.publishDown ?? null,
+    dateAdded: campaign?.dateAdded ?? null,
+    dateModified: campaign?.dateModified ?? null,
+    createdBy: campaign?.createdBy ?? null,
+    createdByUser: campaign?.createdByUser ?? null,
+    modifiedBy: campaign?.modifiedBy ?? null,
+    modifiedByUser: campaign?.modifiedByUser ?? null,
+    eventCount: Array.isArray(campaign?.events) ? campaign.events.length : 0,
+    formCount: Array.isArray(campaign?.forms) ? campaign.forms.length : 0,
+    segmentCount: Array.isArray(campaign?.lists) ? campaign.lists.length : 0,
+    segments: Array.isArray(campaign?.lists)
+      ? campaign.lists.map((segment: any) => ({
+          id: segment?.id ?? null,
+          name: segment?.name ?? null,
+          alias: segment?.alias ?? null,
+        }))
+      : [],
+    forms: Array.isArray(campaign?.forms)
+      ? campaign.forms.map((form: any) => ({
+          id: form?.id ?? null,
+          name: form?.name ?? null,
+          alias: form?.alias ?? null,
+        }))
+      : [],
+  };
+
+  if (options.includeEvents) {
+    normalized.events = Array.isArray(campaign?.events) ? campaign.events.map((event: any) => normalizeCampaignEvent(event, options.includeRaw)) : [];
+  }
+  if (options.includeCanvas) normalized.canvasSettings = campaign?.canvasSettings ?? null;
+  if (options.includeRaw) normalized.raw = campaign;
+
+  return normalized;
+}
+
+function sourceId(value: any): string | null {
+  return value === undefined || value === null ? null : String(value);
+}
+
+function mapCanvasId(value: any, eventIdMap: Map<string, string>): any {
+  const id = sourceId(value);
+  return id && eventIdMap.has(id) ? eventIdMap.get(id) : value;
+}
+
+function cloneCampaignCanvasSettings(canvasSettings: any, eventIdMap: Map<string, string>): any {
+  if (!canvasSettings || typeof canvasSettings !== 'object') return undefined;
+
+  return {
+    ...canvasSettings,
+    nodes: Array.isArray(canvasSettings.nodes)
+      ? canvasSettings.nodes.map((node: any) => ({
+          ...node,
+          id: mapCanvasId(node?.id, eventIdMap),
+        }))
+      : canvasSettings.nodes,
+    connections: Array.isArray(canvasSettings.connections)
+      ? canvasSettings.connections.map((connection: any) => ({
+          ...connection,
+          sourceId: mapCanvasId(connection?.sourceId, eventIdMap),
+          targetId: mapCanvasId(connection?.targetId, eventIdMap),
+        }))
+      : canvasSettings.connections,
+  };
+}
+
+function cloneCampaignEventProperties(event: any): Record<string, unknown> {
+  const properties = event?.properties;
+  if (!properties || typeof properties !== 'object') return {};
+
+  const eventSpecificProperties = properties.properties && typeof properties.properties === 'object' ? properties.properties : null;
+  if (eventSpecificProperties) {
+    return { ...eventSpecificProperties };
+  }
+
+  return flattenActionProperties(properties) ?? {};
+}
+
+function buildCampaignClonePayload(source: any): Record<string, unknown> {
+  const events = Array.isArray(source?.events) ? source.events : [];
+  const eventIdMap = new Map<string, string>();
+  events.forEach((event: any, index: number) => {
+    const id = sourceId(event?.id);
+    if (id) eventIdMap.set(id, `new${index + 1}`);
+  });
+
+  const clonedEvents = events.map((event: any, index: number) => {
+    const clonedEvent: Record<string, unknown> = {
+      id: `new${index + 1}`,
+      name: event?.name ?? '',
+      type: event?.type,
+      eventType: event?.eventType,
+      order: event?.order,
+      properties: cloneCampaignEventProperties(event),
+      triggerMode: event?.triggerMode,
+    };
+
+    setParam(clonedEvent, 'triggerDate', event?.triggerDate);
+    setParam(clonedEvent, 'triggerInterval', event?.triggerInterval);
+    setParam(clonedEvent, 'triggerIntervalUnit', event?.triggerIntervalUnit);
+    setParam(clonedEvent, 'triggerHour', event?.triggerHour);
+    setParam(clonedEvent, 'triggerRestrictedStartHour', event?.triggerRestrictedStartHour);
+    setParam(clonedEvent, 'triggerRestrictedStopHour', event?.triggerRestrictedStopHour);
+    setParam(clonedEvent, 'triggerRestrictedDaysOfWeek', event?.triggerRestrictedDaysOfWeek);
+    setParam(clonedEvent, 'decisionPath', event?.decisionPath);
+
+    const parentId = sourceId(event?.parent?.id);
+    if (parentId && eventIdMap.has(parentId)) {
+      clonedEvent.parent = { id: eventIdMap.get(parentId) };
+    }
+
+    return clonedEvent;
+  });
+
+  const payload: Record<string, unknown> = {
+    name: source?.name,
+    description: source?.description ?? '',
+    isPublished: false,
+    allowRestart: source?.allowRestart ?? false,
+  };
+
+  setParam(payload, 'publishUp', source?.publishUp);
+  setParam(payload, 'publishDown', source?.publishDown);
+  if (source?.category?.id) payload.category = source.category.id;
+  if (clonedEvents.length) payload.events = clonedEvents;
+  if (Array.isArray(source?.lists) && source.lists.length) payload.lists = source.lists.map((segment: any) => ({ id: segment.id }));
+  if (Array.isArray(source?.forms) && source.forms.length) payload.forms = source.forms.map((form: any) => ({ id: form.id }));
+
+  const canvasSettings = cloneCampaignCanvasSettings(source?.canvasSettings, eventIdMap);
+  setParam(payload, 'canvasSettings', canvasSettings);
+
+  return payload;
+}
+
+function buildManagedCampaignExport(source: any): Record<string, unknown> {
+  return {
+    schema: 'helio-mautic-managed-campaign-export',
+    schemaVersion: 1,
+    sourceMauticVersionNote: 'Export shape tested with Mautic 6.0.7',
+    exportedAt: new Date().toISOString(),
+    campaign: {
+      name: source?.name,
+      description: source?.description ?? '',
+      isPublished: false,
+      allowRestart: source?.allowRestart ?? false,
+      publishUp: source?.publishUp ?? null,
+      publishDown: source?.publishDown ?? null,
+      category: source?.category
+        ? {
+            id: source.category.id ?? null,
+            title: source.category.title ?? null,
+            alias: source.category.alias ?? null,
+          }
+        : null,
+      segments: Array.isArray(source?.lists)
+        ? source.lists.map((segment: any) => ({
+            id: segment?.id ?? null,
+            name: segment?.name ?? null,
+            alias: segment?.alias ?? null,
+          }))
+        : [],
+      forms: Array.isArray(source?.forms)
+        ? source.forms.map((form: any) => ({
+            id: form?.id ?? null,
+            name: form?.name ?? null,
+            alias: form?.alias ?? null,
+          }))
+        : [],
+      events: Array.isArray(source?.events)
+        ? source.events.map((event: any) => ({
+            id: event?.id,
+            name: event?.name ?? '',
+            type: event?.type,
+            eventType: event?.eventType,
+            order: event?.order,
+            properties: cloneCampaignEventProperties(event),
+            triggerMode: event?.triggerMode,
+            triggerDate: event?.triggerDate ?? null,
+            triggerInterval: event?.triggerInterval ?? null,
+            triggerIntervalUnit: event?.triggerIntervalUnit ?? null,
+            triggerHour: event?.triggerHour ?? null,
+            triggerRestrictedStartHour: event?.triggerRestrictedStartHour ?? null,
+            triggerRestrictedStopHour: event?.triggerRestrictedStopHour ?? null,
+            triggerRestrictedDaysOfWeek: event?.triggerRestrictedDaysOfWeek ?? [],
+            decisionPath: event?.decisionPath ?? null,
+            parentId: event?.parent?.id ?? null,
+          }))
+        : [],
+      canvasSettings: source?.canvasSettings ?? null,
+    },
+  };
+}
+
+function buildCampaignPayloadFromManagedExport(exportData: any): Record<string, unknown> {
+  const campaign = exportData?.campaign ?? exportData;
+  const events = Array.isArray(campaign?.events) ? campaign.events : [];
+  const eventIdMap = new Map<string, string>();
+  events.forEach((event: any, index: number) => {
+    const id = sourceId(event?.id);
+    if (id) eventIdMap.set(id, `new${index + 1}`);
+  });
+
+  const clonedEvents = events.map((event: any, index: number) => {
+    const clonedEvent: Record<string, unknown> = {
+      id: `new${index + 1}`,
+      name: event?.name ?? '',
+      type: event?.type,
+      eventType: event?.eventType,
+      order: event?.order,
+      properties: event?.properties ?? {},
+      triggerMode: event?.triggerMode,
+    };
+
+    setParam(clonedEvent, 'triggerDate', event?.triggerDate);
+    setParam(clonedEvent, 'triggerInterval', event?.triggerInterval);
+    setParam(clonedEvent, 'triggerIntervalUnit', event?.triggerIntervalUnit);
+    setParam(clonedEvent, 'triggerHour', event?.triggerHour);
+    setParam(clonedEvent, 'triggerRestrictedStartHour', event?.triggerRestrictedStartHour);
+    setParam(clonedEvent, 'triggerRestrictedStopHour', event?.triggerRestrictedStopHour);
+    setParam(clonedEvent, 'triggerRestrictedDaysOfWeek', event?.triggerRestrictedDaysOfWeek);
+    setParam(clonedEvent, 'decisionPath', event?.decisionPath);
+
+    const parentId = sourceId(event?.parentId);
+    if (parentId && eventIdMap.has(parentId)) {
+      clonedEvent.parent = { id: eventIdMap.get(parentId) };
+    }
+
+    return clonedEvent;
+  });
+
+  const payload: Record<string, unknown> = {
+    name: campaign?.name,
+    description: campaign?.description ?? '',
+    isPublished: false,
+    allowRestart: campaign?.allowRestart ?? false,
+  };
+
+  setParam(payload, 'publishUp', campaign?.publishUp);
+  setParam(payload, 'publishDown', campaign?.publishDown);
+  if (campaign?.category?.id) payload.category = campaign.category.id;
+  if (clonedEvents.length) payload.events = clonedEvents;
+  if (Array.isArray(campaign?.segments) && campaign.segments.length) payload.lists = campaign.segments.map((segment: any) => ({ id: segment.id }));
+  if (Array.isArray(campaign?.forms) && campaign.forms.length) payload.forms = campaign.forms.map((form: any) => ({ id: form.id }));
+  setParam(payload, 'canvasSettings', cloneCampaignCanvasSettings(campaign?.canvasSettings, eventIdMap));
+
+  return payload;
+}
+
+function verifyManagedCampaign(source: any, created: any): { verifiedComplete: boolean; warnings: string[] } {
+  const sourceCampaign = source?.campaign ?? source;
+  const sourceEvents = Array.isArray(sourceCampaign?.events) ? sourceCampaign.events : [];
+  const createdEvents = Array.isArray(created?.events) ? created.events : [];
+  const sourceSegments = Array.isArray(sourceCampaign?.segments) ? sourceCampaign.segments : Array.isArray(sourceCampaign?.lists) ? sourceCampaign.lists : [];
+  const createdSegments = Array.isArray(created?.lists) ? created.lists : [];
+  const sourceForms = Array.isArray(sourceCampaign?.forms) ? sourceCampaign.forms : [];
+  const createdForms = Array.isArray(created?.forms) ? created.forms : [];
+  const warnings = [];
+
+  if (sourceEvents.length !== createdEvents.length) warnings.push(`Source had ${sourceEvents.length} events but created campaign has ${createdEvents.length}.`);
+  if (sourceSegments.length !== createdSegments.length) warnings.push(`Source had ${sourceSegments.length} segments but created campaign has ${createdSegments.length}.`);
+  if (sourceForms.length !== createdForms.length) warnings.push(`Source had ${sourceForms.length} forms but created campaign has ${createdForms.length}.`);
+
+  return {
+    verifiedComplete: warnings.length === 0,
+    warnings,
+  };
+}
+
+function validateCampaignAutomationArgs(args: any): string[] {
+  const errors: string[] = [];
+  const events = Array.isArray(args?.events) ? args.events : [];
+  const segments = Array.isArray(args?.segments) ? args.segments : [];
+  const forms = Array.isArray(args?.forms) ? args.forms : [];
+  const eventsById = new Map<string, any>();
+
+  if (segments.length === 0 && forms.length === 0) {
+    errors.push('At least one campaign source is required: pass segments or forms.');
+  }
+
+  if (events.length === 0) {
+    errors.push('At least one campaign event is required.');
+  }
+
+  const eventIds = new Set<string>();
+  for (const event of events) {
+    if (!event?.id) {
+      errors.push(`Event "${event?.name ?? '(unnamed)'}" is missing id; use temporary IDs like new1, new2.`);
+      continue;
+    }
+
+    const eventId = String(event.id);
+    if (!/^new\d+$/.test(eventId)) {
+      errors.push(`Event "${eventId}" must use a temporary ID like new1, new2 when creating campaigns.`);
+    }
+    if (eventIds.has(eventId)) {
+      errors.push(`Duplicate event ID "${eventId}".`);
+    }
+    eventIds.add(eventId);
+    eventsById.set(eventId, event);
+  }
+
+  for (const event of events) {
+    const eventId = sourceId(event?.id);
+    const parentId = sourceId(event?.parent?.id);
+    if (parentId && !eventIds.has(parentId)) {
+      errors.push(`Event "${event?.id}" references missing parent "${parentId}".`);
+    }
+
+    if (event?.decisionPath !== undefined) {
+      if (!parentId) {
+        errors.push(`Event "${eventId ?? event?.name ?? '(unnamed)'}" uses decisionPath but has no parent.`);
+      }
+
+      const parentEventType = parentId ? eventsById.get(parentId)?.eventType : null;
+      if (parentId && parentEventType && !['condition', 'decision'].includes(parentEventType)) {
+        errors.push(`Event "${eventId}" uses decisionPath but parent "${parentId}" is "${parentEventType}", not condition or decision.`);
+      }
+    }
+  }
+
+  const canvasSettings = args?.canvasSettings;
+  if (canvasSettings && typeof canvasSettings === 'object') {
+    const allowedCanvasIds = new Set<string>(['lists', 'forms', ...eventIds]);
+    const nodes = Array.isArray(canvasSettings.nodes) ? canvasSettings.nodes : [];
+    const nodeIds = new Set<string>();
+
+    for (const node of nodes) {
+      const nodeId = sourceId(node?.id);
+      if (!nodeId) {
+        errors.push('Canvas node is missing id.');
+        continue;
+      }
+      nodeIds.add(nodeId);
+      if (!allowedCanvasIds.has(nodeId)) {
+        errors.push(`Canvas node "${nodeId}" does not refer to lists, forms, or an event ID in this request.`);
+      }
+    }
+
+    const connections = Array.isArray(canvasSettings.connections) ? canvasSettings.connections : [];
+    for (const connection of connections) {
+      const source = sourceId(connection?.sourceId);
+      const target = sourceId(connection?.targetId);
+      if (!source || !target) {
+        errors.push('Canvas connection is missing sourceId or targetId.');
+        continue;
+      }
+      if (!nodeIds.has(source) && !allowedCanvasIds.has(source)) {
+        errors.push(`Canvas connection source "${source}" does not refer to a known node/source/event.`);
+      }
+      if (!nodeIds.has(target) && !allowedCanvasIds.has(target)) {
+        errors.push(`Canvas connection target "${target}" does not refer to a known node/source/event.`);
+      }
+    }
+  }
+
+  return errors;
+}
+
+function isDisposableCampaign(campaign: any): boolean {
+  const name = String(campaign?.name ?? '');
+  const description = String(campaign?.description ?? '');
+
+  return (
+    name.startsWith('Codex MCP ') ||
+    name.startsWith('MCP Test ') ||
+    name.includes('Temporary') ||
+    description.includes('Temporary campaign') ||
+    description.includes('Safe to delete')
+  );
+}
+
+function campaignStatsUnavailable(kind: string, campaignId: number, dateFrom: string, dateTo: string): string {
+  return [
+    `Campaign ${campaignId} ${kind} stats were not returned by this Mautic API route (${dateFrom} to ${dateTo}).`,
+    'The generic Mautic 7-labeled tool resolved to campaign detail, not stats, so the MCP is refusing to present it as analytics.',
+    'For Mautic 6, use get_campaign_email_metrics_v6 or get_campaign_map_stats_v6.',
+  ].join('\n');
+}
+
+function buildPagination(total: unknown, start: unknown, limit: unknown, count: number): Record<string, unknown> {
+  const totalNumber = Number(total ?? 0);
+  const startNumber = Number(start ?? 0);
+  const limitNumber = Number(limit ?? count);
+  const nextStart = startNumber + count;
+
+  return {
+    total: Number.isFinite(totalNumber) ? totalNumber : total,
+    start: startNumber,
+    limit: limitNumber,
+    count,
+    hasMore: Number.isFinite(totalNumber) ? nextStart < totalNumber : count >= limitNumber,
+    nextStart: Number.isFinite(totalNumber) && nextStart < totalNumber ? nextStart : null,
+  };
+}
+
 function extractMapOptionsFromHtml(html: string): Record<string, unknown>[] {
   return Array.from(html.matchAll(/<label\b([^>]*)>([\s\S]*?)<\/label>/g))
     .filter(match => match[1].includes('data-map-option'))
@@ -93,6 +576,10 @@ export const toolDefinitions: ToolDefinition[] = [
         limit: { type: 'number', description: 'Number of results', maximum: 200 },
         start: { type: 'number', description: 'Starting offset' },
         publishedOnly: { type: 'boolean', description: 'Only published campaigns' },
+        minimal: { type: 'boolean', description: 'Return compact campaign summaries instead of full nested campaign payloads' },
+        includeEvents: { type: 'boolean', description: 'Include normalized event summaries when minimal is true' },
+        includeCanvas: { type: 'boolean', description: 'Include canvas settings when minimal is true' },
+        includeRaw: { type: 'boolean', description: 'Include raw Mautic campaign payload when minimal is true' },
       },
     },
   },
@@ -103,6 +590,10 @@ export const toolDefinitions: ToolDefinition[] = [
       type: 'object',
       properties: {
         id: { type: 'number', description: 'Campaign ID' },
+        minimal: { type: 'boolean', description: 'Return compact campaign summary instead of full nested campaign payload' },
+        includeEvents: { type: 'boolean', description: 'Include normalized event summaries when minimal is true' },
+        includeCanvas: { type: 'boolean', description: 'Include canvas settings when minimal is true' },
+        includeRaw: { type: 'boolean', description: 'Include raw Mautic campaign payload when minimal is true' },
       },
       required: ['id'],
     },
@@ -120,6 +611,38 @@ export const toolDefinitions: ToolDefinition[] = [
         publishDown: { type: 'string', description: 'Publish end date (YYYY-MM-DD HH:MM:SS)' },
       },
       required: ['name'],
+    },
+  },
+  {
+    name: 'update_campaign',
+    description: 'Update campaign metadata only; use managed clone/import for structural event/source changes',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'Campaign ID' },
+        name: { type: 'string', description: 'Campaign name' },
+        description: { type: 'string', description: 'Campaign description' },
+        isPublished: { type: 'boolean', description: 'Published state' },
+        allowRestart: { type: 'boolean', description: 'Allow campaign restart' },
+        publishUp: { type: 'string', description: 'Publish start date (YYYY-MM-DD HH:MM:SS)' },
+        publishDown: { type: 'string', description: 'Publish end date (YYYY-MM-DD HH:MM:SS)' },
+        category: { type: 'number', description: 'Category ID' },
+        minimal: { type: 'boolean', description: 'Return compact campaign summary instead of full nested campaign payload' },
+        includeRaw: { type: 'boolean', description: 'Return raw Mautic campaign payload instead of normalized metadata' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'delete_campaign',
+    description: 'Delete a campaign; requires confirmation unless the campaign is clearly disposable/test data',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'Campaign ID' },
+        confirmDelete: { type: 'boolean', description: 'Required to delete non-disposable campaigns' },
+      },
+      required: ['id'],
     },
   },
   {
@@ -185,12 +708,16 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'execute_campaign',
-    description: 'Manually execute/trigger a campaign',
+    description: 'Manually execute/trigger a campaign when the Mautic campaign trigger API route is available',
     inputSchema: {
       type: 'object',
       properties: {
         campaignId: { type: 'number', description: 'Campaign ID' },
         contactIds: { type: 'array', items: { type: 'number' }, description: 'Optional: specific contacts' },
+        confirmAllContacts: {
+          type: 'boolean',
+          description: 'Required to trigger a campaign without contactIds, which may execute for the full campaign audience',
+        },
       },
       required: ['campaignId'],
     },
@@ -204,6 +731,11 @@ export const toolDefinitions: ToolDefinition[] = [
         campaignId: { type: 'number', description: 'Campaign ID' },
         start: { type: 'number', description: 'Starting offset' },
         limit: { type: 'number', description: 'Number of results', maximum: 200 },
+        includeContactDetails: { type: 'boolean', description: 'Fetch each member contact and include normalized contact details' },
+        minimal: { type: 'boolean', description: 'Return normalized contact details when includeContactDetails is true' },
+        fieldsOnly: { type: 'boolean', description: 'Return only normalized contact field values plus id when includeContactDetails is true' },
+        fields: { type: 'array', items: { type: 'string' }, description: 'Field aliases to include when contact details are normalized' },
+        pageSize: { type: 'number', description: 'Alias for limit when paging campaign contacts; capped at 50 when enriching contact details, otherwise 200' },
       },
       required: ['campaignId'],
     },
@@ -245,13 +777,15 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_campaign_event_details',
-    description: 'Get detailed metrics for a specific campaign event (Mautic 7)',
+    description: 'Get detailed configuration for a specific campaign event',
     inputSchema: {
       type: 'object',
       properties: {
         eventId: { type: 'number', description: 'Campaign event ID' },
         limit: { type: 'number', description: 'Number of results', maximum: 200 },
         start: { type: 'number', description: 'Starting offset' },
+        minimal: { type: 'boolean', description: 'Return compact event detail without raw form internals' },
+        includeRaw: { type: 'boolean', description: 'Include raw Mautic event payload when minimal is true' },
       },
       required: ['eventId'],
     },
@@ -320,6 +854,19 @@ export const toolHandlers: Record<string, ToolHandler> = {
     setParam(params, 'publishedOnly', args?.publishedOnly);
 
     const response = await client.v1.get('/campaigns', { params });
+    if (args?.minimal) {
+      const campaigns = Object.values(response.data.campaigns ?? {}).map((campaign: any) =>
+        normalizeCampaign(campaign, {
+          includeEvents: args?.includeEvents === true,
+          includeCanvas: args?.includeCanvas === true,
+          includeRaw: args?.includeRaw === true,
+        }),
+      );
+      return {
+        content: [{ type: 'text', text: `Found ${response.data.total} campaigns:\n${JSON.stringify(campaigns, null, 2)}` }],
+      };
+    }
+
     return {
       content: [{ type: 'text', text: `Found ${response.data.total} campaigns:\n${JSON.stringify(response.data.campaigns, null, 2)}` }],
     };
@@ -328,6 +875,17 @@ export const toolHandlers: Record<string, ToolHandler> = {
   async get_campaign(client: MauticApiClient, args: any) {
     const { id } = args;
     const response = await client.v1.get(`/campaigns/${id}`);
+    if (args?.minimal) {
+      const campaign = normalizeCampaign(response.data.campaign, {
+        includeEvents: args?.includeEvents === true,
+        includeCanvas: args?.includeCanvas === true,
+        includeRaw: args?.includeRaw === true,
+      });
+      return {
+        content: [{ type: 'text', text: `Campaign details:\n${JSON.stringify(campaign, null, 2)}` }],
+      };
+    }
+
     return {
       content: [{ type: 'text', text: `Campaign details:\n${JSON.stringify(response.data.campaign, null, 2)}` }],
     };
@@ -337,6 +895,70 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const response = await client.v1.post('/campaigns/new', args);
     return {
       content: [{ type: 'text', text: `Campaign created successfully:\n${JSON.stringify(response.data.campaign, null, 2)}` }],
+    };
+  },
+
+  async update_campaign(client: MauticApiClient, args: any) {
+    const { id, minimal, includeRaw, ...updates } = args;
+    const structuralKeys = ['events', 'segments', 'lists', 'forms', 'canvasSettings'];
+    const rejectedStructuralKeys = structuralKeys.filter(key => updates[key] !== undefined);
+
+    if (rejectedStructuralKeys.length > 0) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: [
+              `Campaign ${id} was not updated.`,
+              `update_campaign is metadata-only and rejects structural fields: ${rejectedStructuralKeys.join(', ')}.`,
+              'Use managed export/import or clone_campaign for campaign structure changes.',
+            ].join('\n'),
+          },
+        ],
+      };
+    }
+
+    const payload: any = {};
+    setParam(payload, 'name', updates.name);
+    setParam(payload, 'description', updates.description);
+    setParam(payload, 'isPublished', updates.isPublished);
+    setParam(payload, 'allowRestart', updates.allowRestart);
+    setParam(payload, 'publishUp', updates.publishUp);
+    setParam(payload, 'publishDown', updates.publishDown);
+    setParam(payload, 'category', updates.category);
+
+    const response = await client.v1.patch(`/campaigns/${id}/edit`, payload);
+    const campaign = includeRaw || minimal === false ? response.data.campaign ?? response.data : normalizeCampaign(response.data.campaign ?? response.data);
+    return {
+      content: [{ type: 'text', text: `Campaign ${id} updated successfully:\n${JSON.stringify(campaign, null, 2)}` }],
+    };
+  },
+
+  async delete_campaign(client: MauticApiClient, args: any) {
+    const { id, confirmDelete } = args;
+    const existingResponse = await client.v1.get(`/campaigns/${id}`);
+    const campaign = existingResponse.data.campaign;
+
+    if (confirmDelete !== true && !isDisposableCampaign(campaign)) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: [
+              `Campaign ${id} was not deleted.`,
+              'Pass confirmDelete: true to delete a non-disposable campaign.',
+              `Campaign: ${campaign?.name ?? '(unknown)'}`,
+            ].join('\n'),
+          },
+        ],
+      };
+    }
+
+    await client.v1.delete(`/campaigns/${id}/delete`);
+    const deleted = normalizeCampaign(campaign, { includeEvents: true });
+
+    return {
+      content: [{ type: 'text', text: `Campaign ${id} deleted successfully:\n${JSON.stringify(deleted, null, 2)}` }],
     };
   },
 
@@ -357,10 +979,22 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async create_campaign_with_automation(client: MauticApiClient, args: any) {
+    const validationErrors = validateCampaignAutomationArgs(args);
+    if (validationErrors.length > 0) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Campaign was not created because automation validation failed:\n${validationErrors.map(error => `- ${error}`).join('\n')}`,
+          },
+        ],
+      };
+    }
+
     const payload: any = {
       name: args.name,
       description: args.description || '',
-      isPublished: args.isPublished !== undefined ? args.isPublished : true,
+      isPublished: args.isPublished !== undefined ? args.isPublished : false,
       allowRestart: args.allowRestart || false,
     };
 
@@ -371,55 +1005,171 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
     const response = await client.v1.post('/campaigns/new', payload);
     return {
-      content: [{ type: 'text', text: `Campaign with automation created successfully:\n${JSON.stringify(response.data.campaign, null, 2)}` }],
+      content: [{ type: 'text', text: `Campaign with automation created successfully:\n${JSON.stringify(normalizeCampaign(response.data.campaign, { includeEvents: true }), null, 2)}` }],
     };
   },
 
   async execute_campaign(client: MauticApiClient, args: any) {
-    const { campaignId, contactIds } = args;
-    const payload: any = {};
-    if (contactIds?.length > 0) payload.contactIds = contactIds;
+    const { campaignId, contactIds, confirmAllContacts } = args;
+    const targetedContactIds = Array.isArray(contactIds) ? contactIds.filter((id: unknown) => id !== undefined && id !== null) : [];
 
-    const response = await client.v1.post(`/campaigns/${campaignId}/trigger`, payload);
+    if (targetedContactIds.length === 0 && confirmAllContacts !== true) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: [
+              `Campaign ${campaignId} was not executed.`,
+              'Pass contactIds for targeted execution, or set confirmAllContacts: true to intentionally trigger without contactIds.',
+            ].join('\n'),
+          },
+        ],
+      };
+    }
+
+    const payload: any = {};
+    if (targetedContactIds.length > 0) payload.contactIds = targetedContactIds;
+
+    let response;
+    try {
+      response = await client.v1.post(`/campaigns/${campaignId}/trigger`, payload);
+    } catch (error: any) {
+      if (error?.response?.status === 404) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: [
+                `Campaign ${campaignId} was not executed.`,
+                'The campaign trigger API route is not available on this Mautic instance.',
+                'This was verified against Mautic 6.0.7; keep this tool for Mautic versions where /campaigns/{id}/trigger exists.',
+              ].join('\n'),
+            },
+          ],
+        };
+      }
+
+      throw error;
+    }
+
+    const result = {
+      campaignId,
+      mode: targetedContactIds.length > 0 ? 'targeted' : 'all',
+      requestedContactIds: targetedContactIds,
+      response: response.data,
+    };
+
     return {
-      content: [{ type: 'text', text: `Campaign ${campaignId} executed successfully:\n${JSON.stringify(response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Campaign ${campaignId} executed successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async get_campaign_contacts(client: MauticApiClient, args: any) {
-    const { campaignId, start, limit } = args;
+    const { campaignId, start, limit, pageSize, includeContactDetails, minimal, fieldsOnly, fields } = args;
     const params: any = {};
     setParam(params, 'start', start);
-    setLimitedParam(params, 'limit', limit, 200);
+    setLimitedParam(params, 'limit', limit ?? pageSize, includeContactDetails ? 50 : 200);
 
     const response = await client.v1.get(`/campaigns/${campaignId}/contacts`, { params });
+    const memberships = Array.isArray(response.data.contacts) ? response.data.contacts : Object.values(response.data.contacts ?? {});
+    const pagination = buildPagination(response.data.total, params.start, params.limit, memberships.length);
+
+    if (includeContactDetails) {
+      const contacts = await Promise.all(
+        memberships.map(async (membership: any) => {
+          const contactId = membership.lead_id ?? membership.contact_id ?? membership.id;
+          if (!contactId) {
+            return { membership, contact: null, error: 'No contact ID found on campaign membership row' };
+          }
+
+          try {
+            const contactResponse = await client.v1.get(`/contacts/${contactId}`);
+            const contact = contactResponse.data.contact;
+            const normalizedContact = fieldsOnly
+              ? { id: contact?.id, fields: normalizeContact(contact, fields).fields }
+              : minimal !== false
+                ? normalizeContact(contact, fields)
+                : contact;
+
+            return {
+              membership,
+              contact: normalizedContact,
+            };
+          } catch (error: any) {
+            return {
+              membership,
+              contact: null,
+              error: error?.response?.data?.errors?.[0]?.message ?? error?.message ?? 'Failed to fetch contact details',
+            };
+          }
+        }),
+      );
+
+      return {
+        content: [{ type: 'text', text: `Campaign ${campaignId} contacts with details:\n${JSON.stringify({ pagination, contacts }, null, 2)}` }],
+      };
+    }
+
+    const result = {
+      pagination,
+      contacts: memberships,
+    };
+
     return {
-      content: [{ type: 'text', text: `Campaign ${campaignId} contacts:\n${JSON.stringify(response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Campaign ${campaignId} contacts:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   // NEW Mautic 7 handlers
   async clone_campaign(client: MauticApiClient, args: any) {
     const { campaignId } = args;
-    const response = await client.v1.post(`/campaigns/clone/${campaignId}`);
+    const sourceResponse = await client.v1.get(`/campaigns/${campaignId}`);
+    const source = sourceResponse.data.campaign;
+    const clonePayload = buildCampaignClonePayload(source);
+    const response = await client.v1.post('/campaigns/new', clonePayload);
+    const clonedId = response.data.campaign?.id;
+    const clonedResponse = clonedId ? await client.v1.get(`/campaigns/${clonedId}`) : response;
+    const cloned = clonedResponse.data.campaign || response.data.campaign || response.data;
+    const verification = verifyManagedCampaign(source, cloned);
+
+    const result = {
+      strategy: 'managed-v1-recreate',
+      source: normalizeCampaign(source, { includeEvents: true }),
+      clone: normalizeCampaign(cloned, { includeEvents: true }),
+      ...verification,
+    };
+
     return {
-      content: [{ type: 'text', text: `Campaign ${campaignId} cloned successfully:\n${JSON.stringify(response.data.campaign || response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Campaign ${campaignId} clone result:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async export_campaign(client: MauticApiClient, args: any) {
     const { campaignId } = args;
-    const response = await client.v1.get(`/campaigns/export/${campaignId}`);
+    const response = await client.v1.get(`/campaigns/${campaignId}`);
+    const exportData = buildManagedCampaignExport(response.data.campaign);
+
     return {
-      content: [{ type: 'text', text: `Campaign ${campaignId} export data:\n${JSON.stringify(response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Campaign ${campaignId} managed export data:\n${JSON.stringify(exportData, null, 2)}` }],
     };
   },
 
   async import_campaign(client: MauticApiClient, args: any) {
     const { campaignData } = args;
-    const response = await client.v1.post('/campaigns/import', campaignData);
+    const payload = buildCampaignPayloadFromManagedExport(campaignData);
+    const response = await client.v1.post('/campaigns/new', payload);
+    const importedId = response.data.campaign?.id;
+    const importedResponse = importedId ? await client.v1.get(`/campaigns/${importedId}`) : response;
+    const imported = importedResponse.data.campaign || response.data.campaign || response.data;
+    const verification = verifyManagedCampaign(campaignData, imported);
+    const result = {
+      strategy: 'managed-v1-import',
+      imported: normalizeCampaign(imported, { includeEvents: true }),
+      ...verification,
+    };
+
     return {
-      content: [{ type: 'text', text: `Campaign imported successfully:\n${JSON.stringify(response.data.campaign || response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Campaign imported successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -430,6 +1180,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
     setParam(params, 'start', start);
 
     const response = await client.v1.get(`/campaigns/events/${eventId}`, { params });
+    if (args?.minimal) {
+      const event = normalizeCampaignEvent(response.data.event ?? response.data, args?.includeRaw === true);
+      return {
+        content: [{ type: 'text', text: `Campaign event ${eventId} details:\n${JSON.stringify(event, null, 2)}` }],
+      };
+    }
+
     return {
       content: [{ type: 'text', text: `Campaign event ${eventId} details:\n${JSON.stringify(response.data, null, 2)}` }],
     };
@@ -440,6 +1197,12 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const response = await client.v1.get(`/campaigns/${campaignId}`, {
       params: { dateFrom, dateTo },
     });
+    if (response.data?.campaign && !response.data?.stats && !response.data?.graphs) {
+      return {
+        content: [{ type: 'text', text: campaignStatsUnavailable('graph', campaignId, dateFrom, dateTo) }],
+      };
+    }
+
     return {
       content: [{ type: 'text', text: `Campaign ${campaignId} stats (${dateFrom} to ${dateTo}):\n${JSON.stringify(response.data, null, 2)}` }],
     };
@@ -450,6 +1213,12 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const response = await client.v1.get(`/campaigns/${campaignId}`, {
       params: { dateFrom, dateTo },
     });
+    if (response.data?.campaign && !response.data?.stats && !response.data?.mapStats) {
+      return {
+        content: [{ type: 'text', text: campaignStatsUnavailable('map', campaignId, dateFrom, dateTo) }],
+      };
+    }
+
     return {
       content: [{ type: 'text', text: `Campaign ${campaignId} map stats (${dateFrom} to ${dateTo}):\n${JSON.stringify(response.data, null, 2)}` }],
     };
