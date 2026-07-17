@@ -1,5 +1,64 @@
 # Changelog
 
+## 0.1.19
+
+- Standardized remaining audited v1 mutation outputs around `success`, `action`, `id`, and an entity summary.
+- Normalized older contact, segment, business, advanced, email send/reply, campaign, file upload, and SMS mutation responses.
+- Changed Mautic 6 partial-route fallbacks to structured `success: false` responses with reasons and alternatives.
+- Consolidated README compatibility notes into one Mautic 6.0.7 section.
+- Documented the live-tested state from the audit round.
+
+## 0.1.18
+
+- Added shared pagination metadata for audited v1 list/search tools.
+- Standardized core list outputs around `{ pagination, ...items }`.
+- Added `start` pagination support to webhook and report list tools.
+- Reused the shared pagination helper for campaign contact membership pagination.
+- Documented paginated list output behavior for local agent use.
+
+## 0.1.17
+
+- Added compact webhook output for `list_webhooks` and new `get_webhook`.
+- Added `update_webhook` and guarded `delete_webhook`.
+- Added compact report output for `list_reports` and new `get_report`.
+- Added `update_report` and guarded `delete_report`.
+- Changed webhook and report creation to default to unpublished unless explicitly requested.
+- Changed `upload_file` to default to the Mautic 6-compatible `media` folder.
+- Normalized upload, webhook, and report mutation outputs.
+- Documented Mautic 6 integration compatibility behavior.
+- Added diagnostic response details for webhook/report create failures.
+- Live-tested webhook and report create/update/delete with disposable unpublished records.
+
+## 0.1.16
+
+- Added compact asset and landing page output for list/detail tools.
+- Added `update_asset` and guarded `delete_asset`.
+- Added `get_page`, `update_page`, and guarded `delete_page`.
+- Changed `create_asset` and `create_page` to default to unpublished unless explicitly requested.
+- Normalized create/update/delete outputs for assets and landing pages.
+- Documented Mautic 6 content compatibility behavior.
+- Fixed local asset creation to upload filesystem paths through `/files/media/new` before creating the asset.
+- Fixed asset creation to send Mautic's documented `file` field instead of `tempName` or `remotePath`.
+- Fixed `upload_file` to use `/files/{folder}/new` with multipart upload.
+
+## 0.1.15
+
+- Added compact form output for `list_forms` and `get_form`.
+- Added `create_form`, defaulting new forms to unpublished.
+- Added `update_form` for form metadata, fields, and actions.
+- Added guarded `delete_form` with explicit confirmation.
+- Normalized `get_form_submissions` output by default.
+- Documented Mautic 6 form compatibility behavior.
+
+## 0.1.14
+
+- Added `update_email` using the Mautic v1 email edit endpoint.
+- Added guarded `delete_email` with explicit confirmation.
+- Normalized email create/update/delete outputs to avoid dumping large email bodies by default.
+- Changed `list_emails` and `get_email` to exclude `customHtml` and `plainText` unless `includeContent: true` is passed.
+- Made `get_email_stats` return a clear Mautic 6 compatibility message when `/emails/{id}/stats` is unavailable.
+- Documented Mautic 6 email compatibility behavior.
+
 ## 0.1.1
 
 - Fixed `get_segment_contacts` for Mautic 6.0.7 by resolving the segment alias and using contact search with `segment:<alias>`.

@@ -1,6 +1,6 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
-import { normalizeContact, setLimitedParam, setParam } from './utils.js';
+import { buildMutationResult, normalizeContact, setLimitedParam, setParam } from './utils.js';
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -168,11 +168,51 @@ function currentTagNames(contact: any): string[] {
 }
 
 function tagMutationResult(contactId: number, requestedTags: string[], contact: any): Record<string, unknown> {
-  return {
-    contactId,
+  return buildMutationResult('tags_updated', contactId, 'contact', normalizeContact(contact), {
     requestedTags,
     currentTags: currentTagNames(contact),
-    contact: normalizeContact(contact),
+  });
+}
+
+function summarizeCompany(company: any): Record<string, unknown> {
+  return {
+    id: company?.id,
+    companyname: company?.companyname,
+    companyemail: company?.companyemail,
+    companywebsite: company?.companywebsite,
+    companycity: company?.companycity,
+    companycountry: company?.companycountry,
+    dateAdded: company?.dateAdded,
+    dateModified: company?.dateModified,
+  };
+}
+
+function summarizeNote(note: any): Record<string, unknown> {
+  return {
+    id: note?.id,
+    type: note?.type,
+    text: note?.text,
+    dateAdded: note?.dateAdded,
+    dateModified: note?.dateModified,
+  };
+}
+
+function summarizeTag(tag: any): Record<string, unknown> {
+  return {
+    id: tag?.id,
+    tag: tag?.tag,
+    dateAdded: tag?.dateAdded,
+    dateModified: tag?.dateModified,
+  };
+}
+
+function summarizeCategory(category: any): Record<string, unknown> {
+  return {
+    id: category?.id,
+    title: category?.title,
+    alias: category?.alias,
+    bundle: category?.bundle,
+    color: category?.color,
   };
 }
 
@@ -191,16 +231,19 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async create_company(client: MauticApiClient, args: any) {
     const response = await client.v1.post('/companies/new', args);
+    const company = summarizeCompany(response.data.company);
+    const result = buildMutationResult('created', company.id, 'company', company, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Company created successfully:\n${JSON.stringify(response.data.company, null, 2)}` }],
+      content: [{ type: 'text', text: `Company created successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async add_contact_to_company(client: MauticApiClient, args: any) {
     const { contactId, companyId } = args;
     await client.v1.post(`/companies/${companyId}/contact/${contactId}/add`);
+    const result = buildMutationResult('added_to_company', contactId, 'membership', { contactId, companyId });
     return {
-      content: [{ type: 'text', text: `Contact ${contactId} added to company ${companyId} successfully` }],
+      content: [{ type: 'text', text: `Contact added to company successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -210,8 +253,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
     setParam(payload, 'company', args.companyId);
 
     const response = await client.v1.post('/notes/new', payload);
+    const note = summarizeNote(response.data.note);
+    const result = buildMutationResult('created', note.id, 'note', note, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Note created successfully:\n${JSON.stringify(response.data.note, null, 2)}` }],
+      content: [{ type: 'text', text: `Note created successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -239,8 +284,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async create_tag(client: MauticApiClient, args: any) {
     const response = await client.v1.post('/tags/new', { tag: args.tag });
+    const tag = summarizeTag(response.data.tag);
+    const result = buildMutationResult('created', tag.id, 'tag', tag, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Tag created successfully:\n${JSON.stringify(response.data.tag, null, 2)}` }],
+      content: [{ type: 'text', text: `Tag created successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -255,7 +302,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
     }
 
     const response = await client.v1.patch(`/contacts/${contactId}/edit`, { tags: tags.join(',') });
-    const result = tagMutationResult(contactId, tags, response.data.contact);
+    const result = {
+      ...tagMutationResult(contactId, tags, response.data.contact),
+      action: 'tags_added',
+    };
 
     return {
       content: [{ type: 'text', text: `Tags added to contact ${contactId} successfully:\n${JSON.stringify(result, null, 2)}` }],
@@ -275,7 +325,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const response = await client.v1.patch(`/contacts/${contactId}/edit`, {
       tags: tags.map((tag: string) => `-${tag}`).join(','),
     });
-    const result = tagMutationResult(contactId, tags, response.data.contact);
+    const result = {
+      ...tagMutationResult(contactId, tags, response.data.contact),
+      action: 'tags_removed',
+    };
 
     return {
       content: [{ type: 'text', text: `Tags removed from contact ${contactId} successfully:\n${JSON.stringify(result, null, 2)}` }],
@@ -295,8 +348,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async create_category(client: MauticApiClient, args: any) {
     const response = await client.v1.post('/categories/new', args);
+    const category = summarizeCategory(response.data.category);
+    const result = buildMutationResult('created', category.id, 'category', category, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Category created successfully:\n${JSON.stringify(response.data.category, null, 2)}` }],
+      content: [{ type: 'text', text: `Category created successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 };

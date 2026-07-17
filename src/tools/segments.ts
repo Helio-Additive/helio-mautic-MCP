@@ -1,7 +1,22 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
-import { normalizeContacts, setLimitedParam, setParam } from './utils.js';
+import { buildMutationResult, buildPagination, normalizeContacts, setLimitedParam, setParam } from './utils.js';
+
+function summarizeSegment(segment: any): Record<string, unknown> {
+  return {
+    id: segment?.id,
+    name: segment?.name,
+    alias: segment?.alias,
+    publicName: segment?.publicName,
+    description: segment?.description,
+    isPublished: segment?.isPublished,
+    isGlobal: segment?.isGlobal,
+    filterCount: Array.isArray(segment?.filters) ? segment.filters.length : Object.keys(segment?.filters ?? {}).length,
+    dateAdded: segment?.dateAdded,
+    dateModified: segment?.dateModified,
+  };
+}
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -99,15 +114,22 @@ export const toolHandlers: Record<string, ToolHandler> = {
     setParam(params, 'publishedOnly', args?.publishedOnly);
 
     const response = await client.v1.get('/segments', { params });
+    const lists = response.data.lists ?? {};
+    const result = {
+      pagination: buildPagination(response.data.total, params.start, params.limit, Object.keys(lists).length),
+      segments: lists,
+    };
     return {
-      content: [{ type: 'text', text: `Found ${response.data.total} segments:\n${JSON.stringify(response.data.lists, null, 2)}` }],
+      content: [{ type: 'text', text: `Found ${response.data.total} segments:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async create_segment(client: MauticApiClient, args: any) {
     const response = await client.v1.post('/segments/new', args);
+    const segment = summarizeSegment(response.data.list);
+    const result = buildMutationResult('created', segment.id, 'segment', segment, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Segment created successfully:\n${JSON.stringify(response.data.list, null, 2)}` }],
+      content: [{ type: 'text', text: `Segment created successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -122,16 +144,20 @@ export const toolHandlers: Record<string, ToolHandler> = {
   async update_segment(client: MauticApiClient, args: any) {
     const { id, ...updateData } = args;
     const response = await client.v1.patch(`/segments/${id}/edit`, updateData);
+    const segment = summarizeSegment(response.data.list);
+    const result = buildMutationResult('updated', segment.id ?? id, 'segment', segment, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Segment ${id} updated successfully:\n${JSON.stringify(response.data.list, null, 2)}` }],
+      content: [{ type: 'text', text: `Segment updated successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async delete_segment(client: MauticApiClient, args: any) {
     const { id } = args;
+    const existing = await client.v1.get(`/segments/${id}`);
     await client.v1.delete(`/segments/${id}/delete`);
+    const result = buildMutationResult('deleted', id, 'segment', summarizeSegment(existing.data.list));
     return {
-      content: [{ type: 'text', text: `Segment ${id} deleted successfully` }],
+      content: [{ type: 'text', text: `Segment deleted successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -157,9 +183,15 @@ export const toolHandlers: Record<string, ToolHandler> = {
       : minimal
         ? normalizeContacts(response.data.contacts, fields)
         : response.data.contacts;
+    const count = Array.isArray(contacts) ? contacts.length : Object.keys(contacts ?? {}).length;
+    const result = {
+      pagination: buildPagination(response.data.total, params.start, params.limit, count),
+      segment: { id: segment.id, alias: segment.alias, name: segment.name },
+      contacts,
+    };
 
     return {
-      content: [{ type: 'text', text: `Found ${response.data.total} contacts in segment ${segment.alias}:\n${JSON.stringify(contacts, null, 2)}` }],
+      content: [{ type: 'text', text: `Found ${response.data.total} contacts in segment ${segment.alias}:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 };
