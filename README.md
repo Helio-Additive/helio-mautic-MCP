@@ -52,6 +52,23 @@ This fork started from a comprehensive Model Context Protocol (MCP) server for M
 [![GitHub Issues](https://img.shields.io/github/issues/Cbrown35/mantic-MCP)](https://github.com/Cbrown35/mantic-MCP/issues)
 [![GitHub License](https://img.shields.io/github/license/Cbrown35/mantic-MCP)](https://github.com/Cbrown35/mantic-MCP/blob/main/LICENSE)
 
+## Mautic 6.0.7 Compatibility
+
+Helio tests this fork against Mautic 6.0.7. API v2 / Mautic 7 code remains preserved from upstream unless a change is explicitly required.
+
+- Audited v1 list/search tools return pagination metadata with `total`, `start`, `limit`, `count`, `hasMore`, and `nextStart`.
+- Audited v1 mutation tools return `success`, `action`, `id`, and a normalized entity summary such as `contact`, `campaign`, `segment`, `email`, or `file`.
+- Large content is excluded by default where it tends to bury agents: email bodies, page HTML, file contents, raw form builder internals, webhook secrets, and heavy report data require `includeContent` or `includeRaw` where available.
+- Mautic 6 does not expose `/emails/{id}/stats`; use `get_email_stats_v6` for aggregate counters and `get_email_graph_stats_v6` for web graph data.
+- The campaign trigger route is unavailable on Mautic 6.0.7; `execute_campaign` is guarded and returns a structured unsupported-route response.
+- Campaign clone/export/import use managed v1 flows that recreate metadata, sources, events, and canvas settings instead of relying on Mautic 7 import/export routes.
+- `update_campaign` is metadata-only. Use managed clone/import for structural event, source, form, or canvas changes.
+- Local asset creation uploads filesystem paths through `/files/media/new`, then creates the asset with the uploaded filename. Mautic 6 accepts file uploads to `media` or `images`.
+- New forms, assets, pages, webhooks, and reports default to unpublished unless `isPublished: true` is explicitly passed.
+- Destructive audited tools require confirmation where implemented, such as email, form, asset, page, webhook, report, and non-disposable campaign deletes.
+
+Live-tested during this audit: contact name updates, segment contact fallback search, tag add/remove, segment remove/delete, campaign contact add/remove, campaign clone/export/import with segment/form/email automation, email update/delete/stats fallbacks, form create/update/delete/submissions, asset upload/create/update/delete, page create/update/delete, webhook create/update/delete, report create/update/delete, and paginated list outputs.
+
 ## Quick Start
 
 ```bash
@@ -145,31 +162,27 @@ SMS API classes have been removed in Mautic 7. The `list_sms` and `create_sms` t
 - **get_campaign_email_metrics_v6** - Campaign email metrics by weekday or hour (Mautic 6)
 - **get_campaign_map_stats_v6** - Campaign geographic stats (Mautic 6)
 
-#### Mautic 6.0.7 Campaign Compatibility Notes
-
-- The native `/campaigns/{id}/trigger` API route is unavailable; `execute_campaign` reports this clearly after applying safety guards.
-- The native clone route can create partial clones on Mautic 6.0.7, so `clone_campaign` uses a managed v1 recreate flow instead.
-- `export_campaign` and `import_campaign` use managed portable JSON instead of Mautic 7 import/export routes.
-- `update_campaign` is metadata-only; structural changes must use managed clone/import.
-- `create_campaign_with_automation` validates sources, events, parent references, decision paths, and canvas references before calling Mautic.
-- Segment-source campaigns are live-tested. Form-source campaigns and `email.send` event creation still require targeted live verification with safe disposable assets.
-
-### Email Operations (10 tools)
+### Email Operations (12 tools)
 - **send_email** - Send emails to specific contacts
-- **list_emails** - Get all email templates and campaigns
-- **get_email** - Get detailed email information
-- **create_email_template** - Create new email templates
-- **get_email_stats** - Get email performance statistics
+- **list_emails** - Get all email templates and campaigns with optional compact/content output
+- **get_email** - Get detailed email information with content excluded by default
+- **create_email_template** - Create new email templates with normalized output
+- **update_email** - Update email metadata/content through the Mautic v1 edit endpoint
+- **delete_email** - Delete emails with explicit confirmation
+- **get_email_stats** - Get email performance statistics when the stats route is available
 - **send_email_to_segment** - Send email to segments (Mautic 7)
 - **record_email_reply** - Record email reply by tracking hash (Mautic 7)
 - **get_email_graph_stats** - Email graph statistics (Mautic 7)
 - **get_email_stats_v6** - Email aggregate counters from the Mautic 6 email detail endpoint
 - **get_email_graph_stats_v6** - Email graph statistics via the Mautic 6 web stats route
 
-### Form Management (3 tools)
-- **list_forms** - Get all forms with submission counts
-- **get_form** - Get form details and fields
-- **get_form_submissions** - Get form submission data
+### Form Management (6 tools)
+- **list_forms** - Get forms with optional compact field/action output
+- **get_form** - Get form details with optional compact field/action output
+- **create_form** - Create Mautic forms through the v1 endpoint, unpublished by default
+- **update_form** - Update form metadata, fields, or actions through the v1 edit endpoint
+- **delete_form** - Delete forms with explicit confirmation
+- **get_form_submissions** - Get normalized form submission data
 
 ### Segment Management (6 tools)
 - **list_segments** - Get all contact segments
@@ -179,12 +192,17 @@ SMS API classes have been removed in Mautic 7. The `list_sms` and `create_sms` t
 - **delete_segment** - Delete contact segments
 - **get_segment_contacts** - Get contacts in a specific segment
 
-### Content Management (7 tools)
-- **list_assets** - Get all assets (PDFs, images, documents)
-- **get_asset** - Get asset details by ID
-- **create_asset** - Create new assets (local or remote)
-- **list_pages** - Get all landing pages
-- **create_page** - Create new landing pages
+### Content Management (12 tools)
+- **list_assets** - Get assets with optional compact output
+- **get_asset** - Get asset details by ID with optional compact output
+- **create_asset** - Create new assets (local or remote), unpublished by default
+- **update_asset** - Update asset metadata through the v1 edit endpoint
+- **delete_asset** - Delete assets with explicit confirmation
+- **list_pages** - Get landing pages with optional compact/content output
+- **get_page** - Get landing page details by ID
+- **create_page** - Create new landing pages, unpublished by default
+- **update_page** - Update landing page metadata/content through the v1 edit endpoint
+- **delete_page** - Delete landing pages with explicit confirmation
 - **list_sms** - Get all SMS templates [DEPRECATED in Mautic 7]
 - **create_sms** - Create SMS templates [DEPRECATED in Mautic 7]
 
@@ -210,12 +228,18 @@ SMS API classes have been removed in Mautic 7. The `list_sms` and `create_sms` t
 - **create_contact_field** - Create new contact custom fields
 - **get_contact_activity** - Get contact interaction history
 
-### Integration & Automation (5 tools)
-- **list_webhooks** - Get all webhooks
-- **create_webhook** - Create new webhooks
-- **upload_file** - Upload files to Mautic
-- **list_reports** - Get all reports
-- **create_report** - Create custom reports
+### Integration & Automation (11 tools)
+- **list_webhooks** - Get webhooks with optional compact output
+- **get_webhook** - Get webhook details by ID
+- **create_webhook** - Create new webhooks, unpublished by default
+- **update_webhook** - Update webhook metadata through the v1 edit endpoint
+- **delete_webhook** - Delete webhooks with explicit confirmation
+- **upload_file** - Upload local files to Mautic `media` or `images`
+- **list_reports** - Get reports with optional compact output
+- **get_report** - Get report details by ID
+- **create_report** - Create custom reports, unpublished by default
+- **update_report** - Update report metadata through the v1 edit endpoint
+- **delete_report** - Delete reports with explicit confirmation
 
 ### Project Management - API v2 (6 tools, Mautic 7)
 - **list_projects** - List all projects

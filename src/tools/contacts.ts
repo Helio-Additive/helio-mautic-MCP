@@ -1,7 +1,7 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
-import { normalizeContact, normalizeContacts, setLimitedParam, setParam } from './utils.js';
+import { buildMutationResult, buildPagination, normalizeContact, normalizeContacts, setLimitedParam, setParam } from './utils.js';
 
 function buildContactPayload(args: any) {
   const { firstName, lastName, ownerId, customFields, ...rest } = args;
@@ -205,16 +205,20 @@ export const toolDefinitions: ToolDefinition[] = [
 export const toolHandlers: Record<string, ToolHandler> = {
   async create_contact(client: MauticApiClient, args: any) {
     const response = await client.v1.post('/contacts/new', buildContactPayload(args));
+    const contact = normalizeContact(response.data.contact);
+    const result = buildMutationResult('created', contact.id, 'contact', contact, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Contact created successfully:\n${JSON.stringify(response.data.contact, null, 2)}` }],
+      content: [{ type: 'text', text: `Contact created successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async update_contact(client: MauticApiClient, args: any) {
     const { id, ...updateData } = args;
     const response = await client.v1.patch(`/contacts/${id}/edit`, buildContactPayload(updateData));
+    const contact = normalizeContact(response.data.contact);
+    const result = buildMutationResult('updated', contact.id ?? id, 'contact', contact, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Contact updated successfully:\n${JSON.stringify(response.data.contact, null, 2)}` }],
+      content: [{ type: 'text', text: `Contact updated successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -278,23 +282,31 @@ export const toolHandlers: Record<string, ToolHandler> = {
       : args?.minimal
         ? normalizeContacts(response.data.contacts, args?.fields)
         : response.data.contacts;
+    const count = Array.isArray(contacts) ? contacts.length : Object.keys(contacts ?? {}).length;
+    const result = {
+      pagination: buildPagination(response.data.total, params.start, params.limit, count),
+      contacts,
+    };
 
     return {
-      content: [{ type: 'text', text: `Found ${response.data.total} contacts:\n${JSON.stringify(contacts, null, 2)}` }],
+      content: [{ type: 'text', text: `Found ${response.data.total} contacts:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async delete_contact(client: MauticApiClient, args: any) {
     const { id } = args;
     await client.v1.delete(`/contacts/${id}/delete`);
-    return { content: [{ type: 'text', text: `Contact ${id} deleted successfully` }] };
+    const result = buildMutationResult('deleted', id, 'contact', { id });
+    return { content: [{ type: 'text', text: `Contact deleted successfully:\n${JSON.stringify(result, null, 2)}` }] };
   },
 
   async assign_contact_owner(client: MauticApiClient, args: any) {
     const { contactId, ownerId } = args;
     const response = await client.v1.patch(`/contacts/${contactId}/edit`, { owner: ownerId });
+    const contact = normalizeContact(response.data.contact);
+    const result = buildMutationResult('owner_updated', contact.id ?? contactId, 'contact', contact, { ownerId });
     return {
-      content: [{ type: 'text', text: `Contact ${contactId} owner updated successfully:\n${JSON.stringify(normalizeContact(response.data.contact), null, 2)}` }],
+      content: [{ type: 'text', text: `Contact owner updated successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -306,37 +318,42 @@ export const toolHandlers: Record<string, ToolHandler> = {
     setParam(payload, 'channelId', channelId);
 
     const response = await client.v1.post(`/contacts/${contactId}/dnc/${encodeURIComponent(channel)}/add`, payload);
+    const contact = normalizeContact(response.data.contact);
+    const result = buildMutationResult('dnc_added', contact.id ?? contactId, 'contact', contact, { channel });
     return {
-      content: [{ type: 'text', text: `DNC added to contact ${contactId} for ${channel}:\n${JSON.stringify(normalizeContact(response.data.contact), null, 2)}` }],
+      content: [{ type: 'text', text: `DNC added successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async remove_contact_dnc(client: MauticApiClient, args: any) {
     const { contactId, channel } = args;
     const response = await client.v1.post(`/contacts/${contactId}/dnc/${encodeURIComponent(channel)}/remove`);
+    const contact = normalizeContact(response.data.contact);
     const result = {
+      ...buildMutationResult('dnc_removed', contact.id ?? contactId, 'contact', contact, { channel }),
       recordFound: response.data.recordFound,
-      contact: normalizeContact(response.data.contact),
     };
 
     return {
-      content: [{ type: 'text', text: `DNC removed from contact ${contactId} for ${channel}:\n${JSON.stringify(result, null, 2)}` }],
+      content: [{ type: 'text', text: `DNC removed successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async add_contact_to_segment(client: MauticApiClient, args: any) {
     const { contactId, segmentId } = args;
     await client.v1.post(`/segments/${segmentId}/contact/${contactId}/add`);
+    const result = buildMutationResult('added_to_segment', contactId, 'membership', { contactId, segmentId });
     return {
-      content: [{ type: 'text', text: `Contact ${contactId} added to segment ${segmentId} successfully` }],
+      content: [{ type: 'text', text: `Contact added to segment successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async remove_contact_from_segment(client: MauticApiClient, args: any) {
     const { contactId, segmentId } = args;
     await client.v1.post(`/segments/${segmentId}/contact/${contactId}/remove`);
+    const result = buildMutationResult('removed_from_segment', contactId, 'membership', { contactId, segmentId });
     return {
-      content: [{ type: 'text', text: `Contact ${contactId} removed from segment ${segmentId} successfully` }],
+      content: [{ type: 'text', text: `Contact removed from segment successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 };

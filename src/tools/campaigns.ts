@@ -1,6 +1,6 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
-import { normalizeContact, setLimitedParam, setParam } from './utils.js';
+import { buildMutationResult, buildPagination, normalizeContact, setLimitedParam, setParam } from './utils.js';
 
 function decodeHtmlEntities(value: string): string {
   return value
@@ -514,27 +514,18 @@ function isDisposableCampaign(campaign: any): boolean {
 }
 
 function campaignStatsUnavailable(kind: string, campaignId: number, dateFrom: string, dateTo: string): string {
-  return [
-    `Campaign ${campaignId} ${kind} stats were not returned by this Mautic API route (${dateFrom} to ${dateTo}).`,
-    'The generic Mautic 7-labeled tool resolved to campaign detail, not stats, so the MCP is refusing to present it as analytics.',
-    'For Mautic 6, use get_campaign_email_metrics_v6 or get_campaign_map_stats_v6.',
-  ].join('\n');
-}
-
-function buildPagination(total: unknown, start: unknown, limit: unknown, count: number): Record<string, unknown> {
-  const totalNumber = Number(total ?? 0);
-  const startNumber = Number(start ?? 0);
-  const limitNumber = Number(limit ?? count);
-  const nextStart = startNumber + count;
-
-  return {
-    total: Number.isFinite(totalNumber) ? totalNumber : total,
-    start: startNumber,
-    limit: limitNumber,
-    count,
-    hasMore: Number.isFinite(totalNumber) ? nextStart < totalNumber : count >= limitNumber,
-    nextStart: Number.isFinite(totalNumber) && nextStart < totalNumber ? nextStart : null,
+  const result = {
+    success: false,
+    action: `${kind}_stats_unavailable`,
+    id: campaignId,
+    dateFrom,
+    dateTo,
+    reason: 'route_returned_campaign_detail',
+    message: 'The generic Mautic 7-labeled stats route resolved to campaign detail, so the MCP is refusing to present it as analytics.',
+    alternatives: ['get_campaign_email_metrics_v6', 'get_campaign_map_stats_v6'],
   };
+
+  return `Campaign ${kind} stats unavailable:\n${JSON.stringify(result, null, 2)}`;
 }
 
 function extractMapOptionsFromHtml(html: string): Record<string, unknown>[] {
@@ -862,13 +853,22 @@ export const toolHandlers: Record<string, ToolHandler> = {
           includeRaw: args?.includeRaw === true,
         }),
       );
+      const result = {
+        pagination: buildPagination(response.data.total, params.start, params.limit, campaigns.length),
+        campaigns,
+      };
       return {
-        content: [{ type: 'text', text: `Found ${response.data.total} campaigns:\n${JSON.stringify(campaigns, null, 2)}` }],
+        content: [{ type: 'text', text: `Found ${response.data.total} campaigns:\n${JSON.stringify(result, null, 2)}` }],
       };
     }
 
+    const campaigns = response.data.campaigns ?? {};
+    const result = {
+      pagination: buildPagination(response.data.total, params.start, params.limit, Object.keys(campaigns).length),
+      campaigns,
+    };
     return {
-      content: [{ type: 'text', text: `Found ${response.data.total} campaigns:\n${JSON.stringify(response.data.campaigns, null, 2)}` }],
+      content: [{ type: 'text', text: `Found ${response.data.total} campaigns:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -893,8 +893,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
   async create_campaign(client: MauticApiClient, args: any) {
     const response = await client.v1.post('/campaigns/new', args);
+    const campaign = normalizeCampaign(response.data.campaign);
+    const result = buildMutationResult('created', campaign.id, 'campaign', campaign, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Campaign created successfully:\n${JSON.stringify(response.data.campaign, null, 2)}` }],
+      content: [{ type: 'text', text: `Campaign created successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -904,17 +906,16 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const rejectedStructuralKeys = structuralKeys.filter(key => updates[key] !== undefined);
 
     if (rejectedStructuralKeys.length > 0) {
+      const result = {
+        success: false,
+        action: 'update_rejected',
+        id,
+        reason: 'structural_fields_not_supported',
+        rejectedFields: rejectedStructuralKeys,
+        message: 'update_campaign is metadata-only. Use managed export/import or clone_campaign for campaign structure changes.',
+      };
       return {
-        content: [
-          {
-            type: 'text',
-            text: [
-              `Campaign ${id} was not updated.`,
-              `update_campaign is metadata-only and rejects structural fields: ${rejectedStructuralKeys.join(', ')}.`,
-              'Use managed export/import or clone_campaign for campaign structure changes.',
-            ].join('\n'),
-          },
-        ],
+        content: [{ type: 'text', text: `Campaign update rejected:\n${JSON.stringify(result, null, 2)}` }],
       };
     }
 
@@ -929,8 +930,9 @@ export const toolHandlers: Record<string, ToolHandler> = {
 
     const response = await client.v1.patch(`/campaigns/${id}/edit`, payload);
     const campaign = includeRaw || minimal === false ? response.data.campaign ?? response.data : normalizeCampaign(response.data.campaign ?? response.data);
+    const result = buildMutationResult('updated', (campaign as any)?.id ?? id, 'campaign', campaign, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Campaign ${id} updated successfully:\n${JSON.stringify(campaign, null, 2)}` }],
+      content: [{ type: 'text', text: `Campaign updated successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -940,54 +942,58 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const campaign = existingResponse.data.campaign;
 
     if (confirmDelete !== true && !isDisposableCampaign(campaign)) {
+      const result = {
+        success: false,
+        action: 'delete_rejected',
+        id,
+        reason: 'confirmation_required',
+        campaign: normalizeCampaign(campaign),
+        message: 'Pass confirmDelete: true to delete a non-disposable campaign.',
+      };
       return {
-        content: [
-          {
-            type: 'text',
-            text: [
-              `Campaign ${id} was not deleted.`,
-              'Pass confirmDelete: true to delete a non-disposable campaign.',
-              `Campaign: ${campaign?.name ?? '(unknown)'}`,
-            ].join('\n'),
-          },
-        ],
+        content: [{ type: 'text', text: `Campaign delete rejected:\n${JSON.stringify(result, null, 2)}` }],
       };
     }
 
     await client.v1.delete(`/campaigns/${id}/delete`);
     const deleted = normalizeCampaign(campaign, { includeEvents: true });
+    const result = buildMutationResult('deleted', id, 'campaign', deleted);
 
     return {
-      content: [{ type: 'text', text: `Campaign ${id} deleted successfully:\n${JSON.stringify(deleted, null, 2)}` }],
+      content: [{ type: 'text', text: `Campaign deleted successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async add_contact_to_campaign(client: MauticApiClient, args: any) {
     const { campaignId, contactId } = args;
     await client.v1.post(`/campaigns/${campaignId}/contact/${contactId}/add`);
+    const result = buildMutationResult('added_to_campaign', contactId, 'membership', { campaignId, contactId });
     return {
-      content: [{ type: 'text', text: `Contact ${contactId} added to campaign ${campaignId} successfully` }],
+      content: [{ type: 'text', text: `Contact added to campaign successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async remove_contact_from_campaign(client: MauticApiClient, args: any) {
     const { campaignId, contactId } = args;
     await client.v1.post(`/campaigns/${campaignId}/contact/${contactId}/remove`);
+    const result = buildMutationResult('removed_from_campaign', contactId, 'membership', { campaignId, contactId });
     return {
-      content: [{ type: 'text', text: `Contact ${contactId} removed from campaign ${campaignId} successfully` }],
+      content: [{ type: 'text', text: `Contact removed from campaign successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async create_campaign_with_automation(client: MauticApiClient, args: any) {
     const validationErrors = validateCampaignAutomationArgs(args);
     if (validationErrors.length > 0) {
+      const result = {
+        success: false,
+        action: 'create_rejected',
+        id: null,
+        reason: 'automation_validation_failed',
+        errors: validationErrors,
+      };
       return {
-        content: [
-          {
-            type: 'text',
-            text: `Campaign was not created because automation validation failed:\n${validationErrors.map(error => `- ${error}`).join('\n')}`,
-          },
-        ],
+        content: [{ type: 'text', text: `Campaign automation validation failed:\n${JSON.stringify(result, null, 2)}` }],
       };
     }
 
@@ -1004,8 +1010,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
     setParam(payload, 'canvasSettings', args.canvasSettings);
 
     const response = await client.v1.post('/campaigns/new', payload);
+    const campaign = normalizeCampaign(response.data.campaign, { includeEvents: true });
+    const result = buildMutationResult('created', campaign.id, 'campaign', campaign, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Campaign with automation created successfully:\n${JSON.stringify(normalizeCampaign(response.data.campaign, { includeEvents: true }), null, 2)}` }],
+      content: [{ type: 'text', text: `Campaign with automation created successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -1014,16 +1022,15 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const targetedContactIds = Array.isArray(contactIds) ? contactIds.filter((id: unknown) => id !== undefined && id !== null) : [];
 
     if (targetedContactIds.length === 0 && confirmAllContacts !== true) {
+      const result = {
+        success: false,
+        action: 'execution_rejected',
+        id: campaignId,
+        reason: 'confirmation_required',
+        message: 'Pass contactIds for targeted execution, or set confirmAllContacts: true to intentionally trigger without contactIds.',
+      };
       return {
-        content: [
-          {
-            type: 'text',
-            text: [
-              `Campaign ${campaignId} was not executed.`,
-              'Pass contactIds for targeted execution, or set confirmAllContacts: true to intentionally trigger without contactIds.',
-            ].join('\n'),
-          },
-        ],
+        content: [{ type: 'text', text: `Campaign execution rejected:\n${JSON.stringify(result, null, 2)}` }],
       };
     }
 
@@ -1035,32 +1042,32 @@ export const toolHandlers: Record<string, ToolHandler> = {
       response = await client.v1.post(`/campaigns/${campaignId}/trigger`, payload);
     } catch (error: any) {
       if (error?.response?.status === 404) {
+        const result = {
+          success: false,
+          action: 'execution_unavailable',
+          id: campaignId,
+          route: `/campaigns/${campaignId}/trigger`,
+          reason: 'route_not_found',
+          message: 'The campaign trigger API route is not available on this Mautic instance. This was verified against Mautic 6.0.7.',
+        };
         return {
-          content: [
-            {
-              type: 'text',
-              text: [
-                `Campaign ${campaignId} was not executed.`,
-                'The campaign trigger API route is not available on this Mautic instance.',
-                'This was verified against Mautic 6.0.7; keep this tool for Mautic versions where /campaigns/{id}/trigger exists.',
-              ].join('\n'),
-            },
-          ],
+          content: [{ type: 'text', text: `Campaign execution unavailable:\n${JSON.stringify(result, null, 2)}` }],
         };
       }
 
       throw error;
     }
 
-    const result = {
+    const execution = {
       campaignId,
       mode: targetedContactIds.length > 0 ? 'targeted' : 'all',
       requestedContactIds: targetedContactIds,
       response: response.data,
     };
+    const result = buildMutationResult('executed', campaignId, 'execution', execution, { success: response.data?.success ?? true });
 
     return {
-      content: [{ type: 'text', text: `Campaign ${campaignId} executed successfully:\n${JSON.stringify(result, null, 2)}` }],
+      content: [{ type: 'text', text: `Campaign executed successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -1133,9 +1140,12 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const verification = verifyManagedCampaign(source, cloned);
 
     const result = {
+      success: true,
+      action: 'cloned',
+      id: cloned?.id,
       strategy: 'managed-v1-recreate',
       source: normalizeCampaign(source, { includeEvents: true }),
-      clone: normalizeCampaign(cloned, { includeEvents: true }),
+      campaign: normalizeCampaign(cloned, { includeEvents: true }),
       ...verification,
     };
 
@@ -1163,8 +1173,11 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const imported = importedResponse.data.campaign || response.data.campaign || response.data;
     const verification = verifyManagedCampaign(campaignData, imported);
     const result = {
+      success: true,
+      action: 'imported',
+      id: imported?.id,
       strategy: 'managed-v1-import',
-      imported: normalizeCampaign(imported, { includeEvents: true }),
+      campaign: normalizeCampaign(imported, { includeEvents: true }),
       ...verification,
     };
 

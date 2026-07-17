@@ -1,6 +1,6 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
-import { setLimitedParam, setParam } from './utils.js';
+import { buildMutationResult, buildPagination, hasValue, setLimitedParam, setParam } from './utils.js';
 
 function pct(numerator: number, denominator: number): number | null {
   if (!denominator) {
@@ -43,8 +43,20 @@ function stripEmailContent(email: any): Record<string, unknown> {
     return email;
   }
 
-  const { customHtml: _customHtml, plainText: _plainText, ...withoutContent } = email;
-  return withoutContent;
+  const {
+    customHtml: _customHtml,
+    plainText: _plainText,
+    grapesjsbuilder: _grapesjsbuilder,
+    dynamicContent: _dynamicContent,
+    headers: _headers,
+    ...withoutContent
+  } = email;
+
+  return {
+    ...withoutContent,
+    variantChildren: Array.isArray(email.variantChildren) ? email.variantChildren.map(summarizeEmail) : email.variantChildren,
+    translationChildren: Array.isArray(email.translationChildren) ? email.translationChildren.map(summarizeEmail) : email.translationChildren,
+  };
 }
 
 function formatEmailOutput(email: any, options: { minimal?: boolean; includeContent?: boolean }): Record<string, unknown> {
@@ -52,11 +64,47 @@ function formatEmailOutput(email: any, options: { minimal?: boolean; includeCont
     return summarizeEmail(email);
   }
 
-  if (options.includeContent === false) {
+  if (options.includeContent !== true) {
     return stripEmailContent(email);
   }
 
   return email;
+}
+
+function pickEmailPayload(args: any): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  const allowedFields = [
+    'name',
+    'subject',
+    'fromAddress',
+    'fromName',
+    'replyToAddress',
+    'customHtml',
+    'plainText',
+    'emailType',
+    'template',
+    'isPublished',
+    'publishUp',
+    'publishDown',
+  ];
+
+  for (const field of allowedFields) {
+    if (hasValue(args?.[field])) {
+      payload[field] = args[field];
+    }
+  }
+
+  return payload;
+}
+
+function normalizeEmailMutation(action: string, responseData: any, options: { minimal?: boolean; includeContent?: boolean } = {}) {
+  const email = responseData?.email ?? responseData;
+  return {
+    success: responseData?.success ?? true,
+    action,
+    id: email?.id,
+    email: formatEmailOutput(email, options),
+  };
 }
 
 function decodeHtmlEntities(value: string): string {
@@ -127,7 +175,7 @@ export const toolDefinitions: ToolDefinition[] = [
         start: { type: 'number', description: 'Starting offset' },
         publishedOnly: { type: 'boolean', description: 'Only published emails' },
         minimal: { type: 'boolean', description: 'Return compact email metadata and counters' },
-        includeContent: { type: 'boolean', description: 'Include customHtml/plainText content in full output (default true)' },
+        includeContent: { type: 'boolean', description: 'Include customHtml/plainText content in full output (default false)' },
       },
     },
   },
@@ -139,7 +187,7 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {
         id: { type: 'number', description: 'Email ID' },
         minimal: { type: 'boolean', description: 'Return compact email metadata and counters' },
-        includeContent: { type: 'boolean', description: 'Include customHtml/plainText content in full output (default true)' },
+        includeContent: { type: 'boolean', description: 'Include customHtml/plainText content in full output (default false)' },
       },
       required: ['id'],
     },
@@ -164,8 +212,45 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'update_email',
+    description: 'Update email metadata/content through the Mautic v1 edit endpoint',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'Email ID' },
+        name: { type: 'string', description: 'Email name' },
+        subject: { type: 'string', description: 'Email subject' },
+        fromAddress: { type: 'string', description: 'From email address' },
+        fromName: { type: 'string', description: 'From name' },
+        replyToAddress: { type: 'string', description: 'Reply-to email address' },
+        customHtml: { type: 'string', description: 'HTML content' },
+        plainText: { type: 'string', description: 'Plain text content' },
+        emailType: { type: 'string', enum: ['template', 'list'], description: 'Email type' },
+        template: { type: 'string', description: 'Mautic email theme/template key' },
+        isPublished: { type: 'boolean', description: 'Publication state' },
+        publishUp: { type: 'string', description: 'Publish-up date/time' },
+        publishDown: { type: 'string', description: 'Publish-down date/time' },
+        minimal: { type: 'boolean', description: 'Return compact email metadata and counters' },
+        includeContent: { type: 'boolean', description: 'Include customHtml/plainText content in output (default false)' },
+      },
+      required: ['id'],
+    },
+  },
+  {
+    name: 'delete_email',
+    description: 'Delete an email by ID; requires explicit confirmation',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'Email ID' },
+        confirmDelete: { type: 'boolean', description: 'Must be true to delete the email' },
+      },
+      required: ['id', 'confirmDelete'],
+    },
+  },
+  {
     name: 'get_email_stats',
-    description: 'Get email performance statistics',
+    description: 'Get email performance statistics when the stats route is available',
     inputSchema: {
       type: 'object',
       properties: {
@@ -247,8 +332,14 @@ export const toolHandlers: Record<string, ToolHandler> = {
     if (contactEmails) data.contactEmails = contactEmails;
 
     const response = await client.v1.post(`/emails/${emailId}/contact/send`, data);
+    const result = buildMutationResult('sent_to_contacts', emailId, 'delivery', {
+      emailId,
+      contactIds: contactIds ?? [],
+      contactEmails: contactEmails ?? [],
+      response: response.data,
+    }, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Email sent successfully:\n${JSON.stringify(response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Email sent successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -266,9 +357,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
         formatEmailOutput(email, { minimal: args?.minimal, includeContent: args?.includeContent }),
       ]),
     );
+    const result = {
+      pagination: buildPagination(response.data.total, params.start, params.limit, Object.keys(emails).length),
+      emails,
+    };
 
     return {
-      content: [{ type: 'text', text: `Found ${response.data.total} emails:\n${JSON.stringify(emails, null, 2)}` }],
+      content: [{ type: 'text', text: `Found ${response.data.total} emails:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -283,34 +378,107 @@ export const toolHandlers: Record<string, ToolHandler> = {
   },
 
   async create_email_template(client: MauticApiClient, args: any) {
-    const response = await client.v1.post('/emails/new', args);
+    const payload = pickEmailPayload(args);
+    const response = await client.v1.post('/emails/new', payload);
+    const result = normalizeEmailMutation('created', response.data, { minimal: true });
     return {
-      content: [{ type: 'text', text: `Email template created successfully:\n${JSON.stringify(response.data.email, null, 2)}` }],
+      content: [{ type: 'text', text: `Email template created successfully:\n${JSON.stringify(result, null, 2)}` }],
+    };
+  },
+
+  async update_email(client: MauticApiClient, args: any) {
+    const { id } = args;
+    const payload = pickEmailPayload(args);
+
+    if (Object.keys(payload).length === 0) {
+      return {
+        content: [{ type: 'text', text: 'No email fields provided to update.' }],
+      };
+    }
+
+    const response = await client.v1.patch(`/emails/${id}/edit`, payload);
+    const result = normalizeEmailMutation('updated', response.data, {
+      minimal: args?.minimal,
+      includeContent: args?.includeContent,
+    });
+
+    return {
+      content: [{ type: 'text', text: `Email updated successfully:\n${JSON.stringify(result, null, 2)}` }],
+    };
+  },
+
+  async delete_email(client: MauticApiClient, args: any) {
+    const { id, confirmDelete } = args;
+    if (confirmDelete !== true) {
+      return {
+        content: [{ type: 'text', text: `Refusing to delete email ${id}. Re-run with confirmDelete: true.` }],
+      };
+    }
+
+    const existing = await client.v1.get(`/emails/${id}`);
+    const existingSummary = summarizeEmail(existing.data.email);
+    const response = await client.v1.delete(`/emails/${id}/delete`);
+    const result = {
+      success: response.data?.success ?? true,
+      action: 'deleted',
+      id,
+      deletedEmail: existingSummary,
+    };
+
+    return {
+      content: [{ type: 'text', text: `Email deleted successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async get_email_stats(client: MauticApiClient, args: any) {
     const { emailId } = args;
-    const response = await client.v1.get(`/emails/${emailId}/stats`);
-    return {
-      content: [{ type: 'text', text: `Email statistics:\n${JSON.stringify(response.data.stats, null, 2)}` }],
-    };
+    try {
+      const response = await client.v1.get(`/emails/${emailId}/stats`);
+      return {
+        content: [{ type: 'text', text: `Email statistics:\n${JSON.stringify(response.data.stats ?? response.data, null, 2)}` }],
+      };
+    } catch (error: any) {
+      if (error?.response?.status === 404) {
+        const result = {
+          success: false,
+          action: 'stats_unavailable',
+          id: emailId,
+          route: `/emails/${emailId}/stats`,
+          reason: 'route_not_found',
+          message: 'Mautic 6 does not expose /emails/{id}/stats through the REST API.',
+          alternatives: ['get_email_stats_v6', 'get_email_graph_stats_v6'],
+        };
+        return {
+          content: [{ type: 'text', text: `Email stats unavailable:\n${JSON.stringify(result, null, 2)}` }],
+        };
+      }
+
+      throw error;
+    }
   },
 
   // NEW Mautic 7 handlers
   async send_email_to_segment(client: MauticApiClient, args: any) {
     const { emailId } = args;
     const response = await client.v1.post(`/emails/${emailId}/send`);
+    const result = buildMutationResult('sent_to_segment', emailId, 'delivery', {
+      emailId,
+      response: response.data,
+    }, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Email ${emailId} sent to segment successfully:\n${JSON.stringify(response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Email sent to segment successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
   async record_email_reply(client: MauticApiClient, args: any) {
     const { trackingHash } = args;
     const response = await client.v1.post(`/emails/reply/${trackingHash}`);
+    const result = buildMutationResult('reply_recorded', trackingHash, 'reply', {
+      trackingHash,
+      response: response.data,
+    }, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Email reply recorded for tracking hash ${trackingHash}:\n${JSON.stringify(response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Email reply recorded successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -319,6 +487,23 @@ export const toolHandlers: Record<string, ToolHandler> = {
     const response = await client.v1.get(`/emails/${emailId}`, {
       params: { dateFrom, dateTo },
     });
+    if (response.data?.email && !response.data?.stats && !response.data?.graphs) {
+      const result = {
+        success: false,
+        action: 'graph_stats_unavailable',
+        id: emailId,
+        route: `/emails/${emailId}`,
+        dateFrom,
+        dateTo,
+        reason: 'route_returned_email_detail',
+        message: 'The generic Mautic 7-labeled graph stats route resolved to email detail on this Mautic instance.',
+        alternatives: ['get_email_graph_stats_v6'],
+      };
+      return {
+        content: [{ type: 'text', text: `Email graph stats unavailable:\n${JSON.stringify(result, null, 2)}` }],
+      };
+    }
+
     return {
       content: [{ type: 'text', text: `Email ${emailId} stats (${dateFrom} to ${dateTo}):\n${JSON.stringify(response.data, null, 2)}` }],
     };

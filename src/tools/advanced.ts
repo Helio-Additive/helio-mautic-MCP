@@ -1,6 +1,21 @@
 import type { MauticApiClient } from '../api/client.js';
 import type { ToolDefinition, ToolHandler } from '../types/index.js';
-import { setLimitedParam, setParam } from './utils.js';
+import { buildMutationResult, setLimitedParam, setParam } from './utils.js';
+
+function summarizeContactField(field: any): Record<string, unknown> {
+  return {
+    id: field?.id,
+    label: field?.label,
+    alias: field?.alias,
+    type: field?.type,
+    object: field?.object,
+    group: field?.group,
+    isRequired: field?.isRequired,
+    isPubliclyUpdatable: field?.isPubliclyUpdatable,
+    dateAdded: field?.dateAdded,
+    dateModified: field?.dateModified,
+  };
+}
 
 export const toolDefinitions: ToolDefinition[] = [
   {
@@ -109,8 +124,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
     };
 
     const response = await client.v1.post(`/contacts/${contactId}/points/plus/${points}`, payload);
+    const result = buildMutationResult('points_added', contactId, 'points', {
+      contactId,
+      points,
+      response: response.data,
+    });
     return {
-      content: [{ type: 'text', text: `Added ${points} points to contact ${contactId} successfully:\n${JSON.stringify(response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Contact points added successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -123,8 +143,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
     };
 
     const response = await client.v1.post(`/contacts/${contactId}/points/minus/${points}`, payload);
+    const result = buildMutationResult('points_subtracted', contactId, 'points', {
+      contactId,
+      points,
+      response: response.data,
+    });
     return {
-      content: [{ type: 'text', text: `Subtracted ${points} points from contact ${contactId} successfully:\n${JSON.stringify(response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Contact points subtracted successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -141,8 +166,13 @@ export const toolHandlers: Record<string, ToolHandler> = {
   async change_contact_stage(client: MauticApiClient, args: any) {
     const { contactId, stageId } = args;
     const response = await client.v1.post(`/contacts/${contactId}/stages/${stageId}/add`);
+    const result = buildMutationResult('stage_changed', contactId, 'stageAssignment', {
+      contactId,
+      stageId,
+      response: response.data,
+    });
     return {
-      content: [{ type: 'text', text: `Contact ${contactId} stage changed to ${stageId} successfully:\n${JSON.stringify(response.data, null, 2)}` }],
+      content: [{ type: 'text', text: `Contact stage changed successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
@@ -168,8 +198,10 @@ export const toolHandlers: Record<string, ToolHandler> = {
     setParam(payload, 'properties', args.properties);
 
     const response = await client.v1.post('/fields/contact/new', payload);
+    const field = summarizeContactField(response.data.field);
+    const result = buildMutationResult('created', field.id, 'field', field, { success: response.data?.success ?? true });
     return {
-      content: [{ type: 'text', text: `Contact field created successfully:\n${JSON.stringify(response.data.field, null, 2)}` }],
+      content: [{ type: 'text', text: `Contact field created successfully:\n${JSON.stringify(result, null, 2)}` }],
     };
   },
 
